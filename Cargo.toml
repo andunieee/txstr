@@ -1,0 +1,15 @@
+[package]
+name = "txstr"
+version = "0.1.0"
+description = "decentralised, minimalist microblogging for hackers, over nostr"
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+ritualistic = { git = "https://github.com/andunieee/ritualistic" }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time"] }
+toml = "1.1.6"
