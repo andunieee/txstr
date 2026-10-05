@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>txstr</title>
+<meta name="description" content="a decentralised, minimalist microblogging network for hackers">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14' font-family='monospace'>➤</text></svg>">
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --fg: #1d1d1b;
+    --dim: #6f6c64;
+    --rule: #dedbd2;
+    --code-bg: #f0eee8;
+    --accent: #2f7d32;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614;
+      --fg: #e6e3da;
+      --dim: #8f8b80;
+      --rule: #2e2d29;
+      --code-bg: #201f1c;
+      --accent: #8fd18f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  main { max-width: 72ch; margin: 0 auto; padding: 48px 16px 96px; }
+  h1 { font-size: 15px; margin: 0; }
+  h1::before { content: "➤ "; color: var(--accent); }
+  h2 {
+    font-size: 15px;
+    margin: 56px 0 12px;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--rule);
+  }
+  h2::before { content: "## "; color: var(--dim); }
+  h3 { font-size: 15px; margin: 28px 0 8px; }
+  p, ul, dl { margin: 0 0 14px; }
+  ul { padding-left: 2ch; }
+  li { margin-bottom: 4px; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  .tagline { color: var(--dim); margin: 4px 0 24px; }
+  nav { margin: 0 0 32px; color: var(--dim); }
+  nav a { margin-right: 1.5ch; white-space: nowrap; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+  pre {
+    background: var(--code-bg);
+    padding: 12px 14px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0 0 16px;
+  }
+  pre code { background: none; padding: 0; }
+  .c { color: var(--dim); }
+  .p { color: var(--accent); user-select: none; }
+  img { max-width: 100%; height: auto; display: block; border-radius: 6px; margin: 8px 0 24px; }
+  dt { font-weight: bold; margin-top: 12px; }
+  dd { margin: 2px 0 0 2ch; }
+  footer { margin-top: 72px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>txstr</h1>
+<p class="tagline">a decentralised, minimalist microblogging network for hackers.</p>
+
+<nav>
+  <a href="#install">install</a>
+  <a href="#quickstart">quickstart</a>
+  <a href="#commands">commands</a>
+  <a href="#config">config</a>
+  <a href="#etiquette">etiquette</a>
+  <a href="#hacking">hacking</a>
+  <a href="#under-the-hood">under the hood</a>
+  <a href="https://github.com/andunieee/txstr">source</a>
+</nav>
+
+<p>So you want to get some thoughts out into the world while also following the
+gibberish of a few people you actually find interesting? Instead of signing up for
+yet another closed platform with an algorithm deciding what you see, txstr gives
+you a nick, a keypair and a terminal.</p>
+
+<p>Your keypair is your identity, your account. Nobody hands it to you and nobody
+can take it away. Your timeline is built from exactly the people you follow. There's
+no ranking, no likes, no reposts, no ads and no "who to follow". You find people the
+old way: someone hands you their key.</p>
+
+<img src="demo.gif" alt="a terminal session: txstr whoami, following, timeline, follow, view, tweet" width="965" height="605">
+
+<h2 id="install">install</h2>
+
+<pre><code><span class="p">$ </span>cargo +nightly install --locked --git https://github.com/andunieee/txstr</code></pre>
+
+<p>You'll need a nightly Rust toolchain. Don't drop <code>--locked</code>: it makes
+cargo build against the exact dependency versions txstr ships with. Building from a
+clone works too; the repository pins nightly in <code>rust-toolchain.toml</code>.</p>
+
+<h2 id="quickstart">quickstart</h2>
+
+<pre><code><span class="p">$ </span>txstr quickstart
+txstr - quickstart
+==================
+
+this wizard will set up txstr for you.
+
+➤ please enter your desired nick [you]: ghost
+➤ paste an existing nsec, or leave empty to generate a fresh key:
+➤ relays to talk to, space separated [wss://relay.damus.io wss://nos.lol wss://relay.primal.net]:
+➤ publish your follow list too, so other clients can see it? (y/N):
+
+✓ created config file at ~/.config/txstr/config.toml
+✓ you are ghost — tell your friends:
+  txstr follow ghost npub1…</code></pre>
+
+<p>That last line is your calling card. Paste it in a chat, put it in your
+<code>.plan</code>, print it on a sticker.</p>
+
+<h2 id="commands">commands</h2>
+
+<h3>txstr tweet [text…]</h3>
+<p>Posts a note. Aliased as <code>post</code>. With no arguments it reads from stdin,
+so it composes with anything:</p>
+<pre><code><span class="p">$ </span>txstr tweet "compiling, brb"
+<span class="p">$ </span>fortune -s | txstr tweet
+<span class="p">$ </span>uptime | txstr post</code></pre>
+<p>If the note is longer than <code>character_warning</code>, txstr asks before
+sending it. Be brief.</p>
+
+<h3>txstr timeline [-l N] [-a]</h3>
+<p>Shows the latest notes from everyone you follow, plus your own, newest first.
+<code>-l</code> sets how many, <code>-a</code> flips the order to oldest first.</p>
+<pre><code><span class="p">$ </span>txstr timeline -l 2
+➤ ken (40 minutes ago):
+my homelab uptime is longer than most of my relationships
+
+➤ ada (2 hours ago):
+@ken the man page agrees with you</code></pre>
+
+<h3>txstr view &lt;nick|npub&gt; [-l N] [-a]</h3>
+<p>Same as <code>timeline</code>, but for a single person. Works for people you
+don't follow, too: just pass their key.</p>
+
+<h3>txstr follow &lt;nick&gt; &lt;npub&gt;</h3>
+<p>Adds someone to your follow list under a nick of your choosing. Nicks are
+local and personal: you can call people whatever helps you remember them.</p>
+
+<h3>txstr unfollow &lt;nick&gt;</h3>
+<p>Removes them. No notification is sent. Nobody's feelings get hurt.</p>
+
+<h3>txstr following</h3>
+<p>Lists everyone you follow, one per line. Pipe it, diff it, share it.</p>
+
+<h3>txstr whoami</h3>
+<p>Prints your nick and your public key.</p>
+
+<h3>mentions</h3>
+<p>Writing <code>@nick</code> for someone you follow turns into a real mention that
+their client will notice. When you read notes, mentions of people you know show up
+as <code>@nick</code> again, and everyone else is shown as a short key.</p>
+
+<h3>global flags</h3>
+<p><code>-c, --config &lt;path&gt;</code> uses a different config file, handy for
+running several identities or a throwaway test setup.</p>
+
+<h2 id="config">config</h2>
+
+<p>Everything lives in <code>~/.config/txstr/config.toml</code>. It's meant to be
+read and edited by hand. It also holds your secret key, so txstr writes it with
+<code>0600</code> permissions; keep it that way and keep it out of public dotfiles.</p>
+
+<pre><code>nick = "ghost"
+secret_key = "nsec1…"
+relays = ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net"]
+publish_follows = false
+limit_timeline = 20
+character_warning = 280
+timeout = 10
+
+[following]
+ada = "npub1…"
+ken = "npub1…"</code></pre>
+
+<dl>
+  <dt>nick</dt>
+  <dd>What you call yourself, and how your own notes show up in your timeline.</dd>
+  <dt>secret_key</dt>
+  <dd>Your identity. Lose it and you're starting over; leak it and someone else is you.</dd>
+  <dt>relays</dt>
+  <dd>The servers txstr talks to. Notes go to all of them and are read from all of
+  them, so any one of them going away doesn't matter much. Run your own if you like.</dd>
+  <dt>publish_follows</dt>
+  <dd>Off by default: your follow list stays in this file. Turn it on and every
+  <code>follow</code>/<code>unfollow</code> also publishes the list, with your nicks
+  attached, so other clients can see it. If you already have a published list from
+  another client, txstr merges into it instead of replacing it.</dd>
+  <dt>limit_timeline</dt>
+  <dd>How many notes <code>timeline</code> and <code>view</code> show by default.</dd>
+  <dt>character_warning</dt>
+  <dd>Ask before posting anything longer than this. Remove the line to never ask.</dd>
+  <dt>timeout</dt>
+  <dd>Seconds to wait on slow servers before moving on.</dd>
+  <dt>[following]</dt>
+  <dd>nick = key, one per line, in whatever order you like.</dd>
+</dl>
+
+<h2 id="etiquette">etiquette</h2>
+
+<ul>
+  <li>Say things worth reading. Nobody is grading you on frequency.</li>
+  <li>Share your <code>txstr following</code> with friends. That's how people find each other here.</li>
+  <li>Text is the medium. If it needs a screenshot, it probably needs a blog post.</li>
+  <li>Be kind. It's a small place.</li>
+</ul>
+
+<h2 id="hacking">hacking</h2>
+
+<p>The repository ships a tiny in-memory server for trying things without talking
+to anyone:</p>
+<pre><code><span class="p">$ </span>cargo run --example devrelay   <span class="c"># ws://127.0.0.1:7777</span>
+<span class="p">$ </span>txstr -c dev.toml quickstart     <span class="c"># and give it ws://127.0.0.1:7777 as the relay</span></code></pre>
+<p>The demo on this page is recorded against it with <code>docs/demo/record.sh</code>.
+Patches welcome.</p>
+
+<h2 id="under-the-hood">under the hood</h2>
+
+<p>txstr speaks <a href="https://nostr.com">nostr</a>, through the
+<a href="https://github.com/andunieee/ritualistic">ritualistic</a> library. Notes are
+plain kind 1 events, mentions are NIP-27 references with <code>p</code> tags, and a
+published follow list is a NIP-02 kind 3 event with your nicks as petnames. Which
+means your notes are readable from any other client, and anyone there is one
+<code>txstr follow</code> away.</p>
+
+<footer>txstr is released under the MIT license.</footer>
+
+</main>
+</body>
+</html>
