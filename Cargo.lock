@@ -1465,6 +1465,8 @@ dependencies = [
 [[package]]
 name = "ritualistic"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9312efd735cb71243a48a0eebfb187887913923ab422c7f9f1198ac3967895a"
 dependencies = [
  "base64",
  "bech32",
