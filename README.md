@@ -35,15 +35,15 @@ Features
 Getting started
 ---------------
 
-    $ cargo +nightly install --locked --git https://github.com/andunieee/txstr
+    $ cargo install --locked --git https://github.com/andunieee/txstr
     $ txstr quickstart
     $ txstr whoami        # give the output to your friends
     $ txstr follow ken npub1…
     $ txstr tweet "hello world"
     $ txstr timeline
 
-txstr needs a nightly Rust toolchain, and `--locked` matters: it builds
-against the exact dependency versions in `Cargo.lock`.
+txstr needs Rust 1.91 or newer, and `--locked` matters: it builds against
+the exact dependency versions in `Cargo.lock`.
 
 Documentation
 -------------
