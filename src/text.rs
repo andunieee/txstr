@@ -1,7 +1,7 @@
 //! turning `@nick` into `nostr:npub…` on the way out, and back again on the way in,
 //! and working out where a note sits in a thread.
 
-use ritualistic::{PubKey, Tag, ID};
+use ritualistic::{ID, PubKey, Tag};
 
 /// expands `@nick` for people in your follow list into nip-27 references,
 /// returning the new content and the `p` tags to go with it.

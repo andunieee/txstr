@@ -38,7 +38,7 @@ enum Command {
     /// set up your nick, key and relays
     Quickstart,
 
-    /// post a note (reads stdin when no text is given)
+    /// post a note (reads stdin when piped, opens $EDITOR otherwise)
     #[command(alias = "post")]
     Tweet { text: Vec<String> },
 
@@ -170,12 +170,14 @@ async fn main() -> Result<()> {
 }
 
 async fn tweet(config: &Config, words: Vec<String>, parent: Option<Event>) -> Result<()> {
-    let raw = if words.is_empty() {
+    let raw = if !words.is_empty() {
+        words.join(" ")
+    } else if std::io::stdin().is_terminal() {
+        compose()?
+    } else {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf)?;
         buf
-    } else {
-        words.join(" ")
     };
     let raw = raw.trim();
     if raw.is_empty() {
@@ -214,6 +216,30 @@ async fn tweet(config: &Config, words: Vec<String>, parent: Option<Event>) -> Re
         if ok == 1 { "" } else { "s" }
     );
     Ok(())
+}
+
+/// opens $VISUAL or $EDITOR on an empty file and returns whatever was written.
+fn compose() -> Result<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let path = std::env::temp_dir().join(format!("txstr-{}.txt", std::process::id()));
+    std::fs::write(&path, "")?;
+
+    // through the shell, so EDITOR="code --wait" works like it does for git
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("sh")
+        .arg(&path)
+        .status()
+        .with_context(|| format!("couldn't run your editor ({editor})"));
+    let text = std::fs::read_to_string(&path);
+    let _ = std::fs::remove_file(&path);
+    if !status?.success() {
+        bail!("{editor} exited with an error, not posting");
+    }
+    Ok(text?)
 }
 
 /// nip-10 marked tags for a reply: point at the thread's root and at the
