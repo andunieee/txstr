@@ -1,6 +1,7 @@
-//! turning `@nick` into `nostr:npub…` on the way out, and back again on the way in.
+//! turning `@nick` into `nostr:npub…` on the way out, and back again on the way in,
+//! and working out where a note sits in a thread.
 
-use ritualistic::{PubKey, Tag};
+use ritualistic::{PubKey, Tag, ID};
 
 /// expands `@nick` for people in your follow list into nip-27 references,
 /// returning the new content and the `p` tags to go with it.
@@ -81,6 +82,35 @@ pub fn short_npub(pk: &PubKey) -> String {
     format!("{}…{}", &npub[..9], &npub[npub.len() - 4..])
 }
 
+/// the (root, parent) a note replies to, per nip-10. marked `e` tags win; older
+/// clients just list them in order, first being the root and last the parent.
+pub fn thread_refs(tags: &[Tag]) -> (Option<ID>, Option<ID>) {
+    let e_tags: Vec<&Tag> = tags
+        .iter()
+        .filter(|t| t.first().map(String::as_str) == Some("e") && t.len() >= 2)
+        .collect();
+    let id = |t: &Tag| ID::from_hex(&t[1]).ok();
+    let marked = |marker: &str| {
+        e_tags
+            .iter()
+            .find(|t| t.get(3).map(String::as_str) == Some(marker))
+            .and_then(|t| id(t))
+    };
+
+    let (root, parent) = (marked("root"), marked("reply"));
+    if root.is_some() || parent.is_some() {
+        // a reply straight to the root only carries the root marker
+        return (root.or(parent), parent.or(root));
+    }
+    // positional: skip "mention" tags, which aren't part of the thread
+    let positional: Vec<ID> = e_tags
+        .iter()
+        .filter(|t| t.get(3).is_none_or(|m| m.is_empty()))
+        .filter_map(|t| id(t))
+        .collect();
+    (positional.first().copied(), positional.last().copied())
+}
+
 /// "3 minutes ago", the way twtxt says it.
 pub fn time_ago(then: u32, now: u32) -> String {
     let delta = now.saturating_sub(then) as u64;
@@ -129,6 +159,23 @@ mod tests {
         let pk = ritualistic::SecretKey::generate().pubkey();
         let shown = collapse_mentions(&format!("cc nostr:{}", pk.to_npub()), &[]);
         assert_eq!(shown, format!("cc @{}", short_npub(&pk)));
+    }
+
+    fn e(id: &ID, marker: &str) -> Tag {
+        vec!["e".into(), id.to_hex(), String::new(), marker.into()]
+    }
+
+    #[test]
+    fn thread_references() {
+        let (r, p) = (ID([1; 32]), ID([2; 32]));
+        assert_eq!(thread_refs(&[]), (None, None));
+        assert_eq!(thread_refs(&[e(&r, "root")]), (Some(r), Some(r)));
+        assert_eq!(
+            thread_refs(&[e(&p, "reply"), e(&r, "root")]),
+            (Some(r), Some(p))
+        );
+        assert_eq!(thread_refs(&[e(&r, ""), e(&p, "")]), (Some(r), Some(p)));
+        assert_eq!(thread_refs(&[e(&r, "mention")]), (None, None));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! twtxt's spirit, nostr's plumbing.
 
 mod config;
+mod seen;
 mod text;
 
 use std::io::{BufRead, IsTerminal, Read, Write};
@@ -11,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use ritualistic::{
-    Event, EventTemplate, Filter, Kind, Network, Occurrence, PubKey, SecretKey,
+    Event, EventTemplate, Filter, ID, Kind, Network, Occurrence, PubKey, SecretKey,
     SubscriptionOptions, Tag, Tags, Timestamp,
 };
 
@@ -177,9 +178,15 @@ async fn tweet(config: &Config, words: Vec<String>) -> Result<()> {
         content,
     }
     .finalize(&config.secret_key()?);
+    let id = event.id;
 
     let ok = publish(config, event).await?;
-    println!("✓ posted to {ok} relay{}.", if ok == 1 { "" } else { "s" });
+    seen::remember([id]);
+    println!(
+        "✓ posted {} to {ok} relay{}.",
+        seen::short(&id),
+        if ok == 1 { "" } else { "s" }
+    );
     Ok(())
 }
 
@@ -303,16 +310,36 @@ async fn show(
     }
 
     let known = config.known();
-    let now = Timestamp::now().0;
     for event in &events {
-        println!(
-            "➤ {} ({}):\n{}\n",
-            bold(&text::display_name(&event.pubkey, &known)),
-            dim(&text::time_ago(event.created_at.0, now)),
-            text::collapse_mentions(&event.content, &known),
-        );
+        print_note(event, &known, "");
     }
+    seen::remember(events.iter().flat_map(hashes_shown));
     Ok(())
+}
+
+/// the note's own id and, for replies, its parent's: both get printed.
+fn hashes_shown(event: &Event) -> impl Iterator<Item = ID> {
+    [Some(event.id), text::thread_refs(&event.tags.0).1]
+        .into_iter()
+        .flatten()
+}
+
+fn print_note(event: &Event, known: &[(String, PubKey)], indent: &str) {
+    let mut header = format!(
+        "{indent}➤ {} ({}) {}",
+        bold(&text::display_name(&event.pubkey, known)),
+        dim(&text::time_ago(event.created_at.0, Timestamp::now().0)),
+        dim(&format!("[{}]", seen::short(&event.id))),
+    );
+    if let (_, Some(parent)) = text::thread_refs(&event.tags.0) {
+        header += &dim(&format!(" ↪ [{}]", seen::short(&parent)));
+    }
+    let content = text::collapse_mentions(&event.content, known);
+    println!("{header}:");
+    for line in content.lines() {
+        println!("{indent}{line}");
+    }
+    println!();
 }
 
 /// collects events until every relay says EOSE or we run out of patience.
