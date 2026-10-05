@@ -95,15 +95,16 @@ can take it away. Your timeline is built from exactly the people you follow. The
 no ranking, no likes, no reposts, no ads and no "who to follow". You find people the
 old way: someone hands you their key.</p>
 
-<img src="demo.gif" alt="a terminal session: txstr whoami, following, timeline, follow, view, tweet" width="965" height="605">
+<img src="demo.gif" alt="a terminal session: txstr whoami, following, timeline, follow, view, tweet, reply, thread" width="965" height="605">
 
 <h2 id="install">install</h2>
 
-<pre><code><span class="p">$ </span>cargo +nightly install --locked --git https://github.com/andunieee/txstr</code></pre>
+<pre><code><span class="p">$ </span>cargo install --locked --git https://github.com/andunieee/txstr</code></pre>
 
-<p>You'll need a nightly Rust toolchain. Don't drop <code>--locked</code>: it makes
-cargo build against the exact dependency versions txstr ships with. Building from a
-clone works too; the repository pins nightly in <code>rust-toolchain.toml</code>.</p>
+<p>You'll need a stable Rust toolchain, 1.91 or newer. Don't drop <code>--locked</code>: it makes
+cargo build against the exact dependency versions txstr ships with. Run the same
+command again to update. Building from a clone works too with plain
+<code>cargo install --locked --path .</code></p>
 
 <h2 id="quickstart">quickstart</h2>
 
@@ -128,34 +129,65 @@ this wizard will set up txstr for you.
 <h2 id="commands">commands</h2>
 
 <h3>txstr tweet [text…]</h3>
-<p>Posts a note. Aliased as <code>post</code>. With no arguments it reads from stdin,
-so it composes with anything:</p>
+<p>Posts a note. Aliased as <code>post</code>. With arguments it posts them directly.
+Piped input is read from stdin, so it composes with anything. With neither it
+opens <code>$VISUAL</code> or <code>$EDITOR</code> (falling back to <code>vi</code>),
+so a bare <code>txstr tweet</code> drops you in your editor:</p>
 <pre><code><span class="p">$ </span>txstr tweet "compiling, brb"
+<span class="p">$ </span>txstr tweet
 <span class="p">$ </span>fortune -s | txstr tweet
 <span class="p">$ </span>uptime | txstr post</code></pre>
 <p>If the note is longer than <code>character_warning</code>, txstr asks before
-sending it. Be brief.</p>
+sending it. Be brief. After posting it prints the note's short hash.</p>
 
-<h3>txstr timeline [-l N] [-a]</h3>
+<h3>txstr timeline [-l N] [-a] [-f]</h3>
 <p>Shows the latest notes from everyone you follow, plus your own, newest first.
-<code>-l</code> sets how many, <code>-a</code> flips the order to oldest first.</p>
+<code>-l</code> sets how many, <code>-a</code> flips the order to oldest first,
+<code>-f</code> keeps watching for new notes, like <code>tail -f</code>, until
+you interrupt it. Every note prints with its git-style short hash, and replies
+point at their parent:</p>
 <pre><code><span class="p">$ </span>txstr timeline -l 2
-➤ ken (40 minutes ago):
+➤ ken (40 minutes ago) [a1b2c3d]:
 my homelab uptime is longer than most of my relationships
 
-➤ ada (2 hours ago):
+➤ ada (2 hours ago) [e4f5a6b] ↪ [c7d8e9f]:
 @ken the man page agrees with you</code></pre>
+<p>Pipe it through <code>less</code> or <code>grep</code>; colors turn off when the
+output isn't a terminal.</p>
 
-<h3>txstr view &lt;nick|npub&gt; [-l N] [-a]</h3>
-<p>Same as <code>timeline</code>, but for a single person. Works for people you
-don't follow, too: just pass their key.</p>
+<h3>txstr view &lt;nick|npub&gt; [-l N] [-a] [-f]</h3>
+<p>Same as <code>timeline</code>, but for a single person, with the same
+<code>-l</code>/<code>-a</code>/<code>-f</code> flags. Works for people you
+don't follow, too: just pass their key. <code>who</code> accepts a nick from
+your follow list (with or without a leading <code>@</code>), your own nick, or
+an npub, nprofile or hex key directly.</p>
+
+<h3>txstr reply &lt;hash&gt; [text…]</h3>
+<p>Replies to a note, addressed by its short hash — the <code>[a1b2c3d]</code> printed
+next to every note. Like <code>tweet</code>, it posts its arguments, reads piped
+stdin, or opens your editor when given neither. The hash can be a short prefix,
+a full hex id, a <code>note1…</code> or <code>nevent1…</code> reference, optionally
+wrapped in <code>[]</code>:</p>
+<pre><code><span class="p">$ </span>txstr reply a1b2c3d "man grep is 2000 lines. ken was right"
+<span class="p">$ </span>echo "same here" | txstr reply a1b2c3d</code></pre>
+<p>Hashes only work for notes txstr has already printed — each
+<code>timeline</code>, <code>view</code> and <code>thread</code> remembers what it
+showed, git style. If it complains it hasn't seen a hash, read the note first
+and copy the hash from there. Replies carry NIP-10 threading tags, so other
+clients render them in place.</p>
+
+<h3>txstr thread &lt;hash&gt;</h3>
+<p>Shows the whole conversation a note belongs to, as an indented tree with the
+same short hashes:</p>
+<pre><code><span class="p">$ </span>txstr thread a1b2c3d</code></pre>
 
 <h3>txstr follow &lt;nick&gt; &lt;npub&gt;</h3>
 <p>Adds someone to your follow list under a nick of your choosing. Nicks are
-local and personal: you can call people whatever helps you remember them.</p>
+local and personal: you can call people whatever helps you remember them.
+A leading <code>@</code> on the nick is ignored, so pasting one is fine.</p>
 
 <h3>txstr unfollow &lt;nick&gt;</h3>
-<p>Removes them. No notification is sent. Nobody's feelings get hurt.</p>
+<p>Removes them; a leading <code>@</code> is fine here too. No notification is sent. Nobody's feelings get hurt.</p>
 
 <h3>txstr following</h3>
 <p>Lists everyone you follow, one per line. Pipe it, diff it, share it.</p>
@@ -165,12 +197,15 @@ local and personal: you can call people whatever helps you remember them.</p>
 
 <h3>mentions</h3>
 <p>Writing <code>@nick</code> for someone you follow turns into a real mention that
-their client will notice. When you read notes, mentions of people you know show up
-as <code>@nick</code> again, and everyone else is shown as a short key.</p>
+their client will notice. A trailing dot is punctuation, not part of the nick, and
+addresses like <code>mail@example.com</code> are left alone. When you read notes, mentions of people you know show up
+as <code>@nick</code> again, and everyone else is shown shortened, like
+<code>@npub1abc…1234</code>.</p>
 
 <h3>global flags</h3>
 <p><code>-c, --config &lt;path&gt;</code> uses a different config file, handy for
-running several identities or a throwaway test setup.</p>
+running several identities or a throwaway test setup. <code>txstr --help</code>
+and <code>txstr &lt;command&gt; --help</code> print the rest.</p>
 
 <h2 id="config">config</h2>
 
@@ -194,7 +229,7 @@ ken = "npub1…"</code></pre>
   <dt>nick</dt>
   <dd>What you call yourself, and how your own notes show up in your timeline.</dd>
   <dt>secret_key</dt>
-  <dd>Your identity. Lose it and you're starting over; leak it and someone else is you.</dd>
+  <dd>Your identity, as an nsec or hex key. Lose it and you're starting over; leak it and someone else is you.</dd>
   <dt>relays</dt>
   <dd>The servers txstr talks to. Notes go to all of them and are read from all of
   them, so any one of them going away doesn't matter much. Run your own if you like.</dd>
