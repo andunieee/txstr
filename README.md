@@ -17,13 +17,26 @@ send signed notes to servers hosted by others and anyone can verify them.
 Getting started
 ---------------
 
+Prebuilt binaries for Linux, macOS, and Windows live on the
+[releases page](https://github.com/andunieee/txstr/releases). Grab the
+archive for your platform, unpack it, and put `txstr` somewhere on your
+`PATH`:
+
+    $ tar -xzf txstr-x86_64-unknown-linux-gnu.tar.gz
+    $ ./x86_64-unknown-linux-gnu/txstr quickstart
+
+Or build from source:
+
     $ cargo install --locked --git https://github.com/andunieee/txstr
+
+Then:
+
     $ txstr quickstart
     $ txstr follow ghost npub1…
     $ txstr tweet "hello world"
     $ txstr timeline
 
-Requires Rust 1.91+. Always use `--locked`. Run install again to update.
+Requires Rust 1.91+ for source builds. Always use `--locked`. Run install again to update.
 
 Documentation
 -------------

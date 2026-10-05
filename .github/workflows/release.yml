@@ -1,0 +1,77 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME=txstr
+          TARGET=${{ matrix.target }}
+          BIN="$NAME"
+          if [[ "$TARGET" == *windows* ]]; then BIN="$BIN.exe"; fi
+          SRC="target/$TARGET/release/$BIN"
+          test -f "$SRC"
+          STAGE="dist/$TARGET"
+          mkdir -p "$STAGE"
+          cp "$SRC" "$STAGE/"
+          cp README.md "$STAGE/" 2>/dev/null || true
+          if [[ "$TARGET" == *windows* ]]; then
+            (cd dist && 7z a "../$NAME-$TARGET.zip" "./$TARGET/*")
+            echo "ASSET=$NAME-$TARGET.zip" >> "$GITHUB_ENV"
+          else
+            chmod +x "$STAGE/$BIN"
+            tar -czf "$NAME-$TARGET.tar.gz" -C dist "$TARGET"
+            echo "ASSET=$NAME-$TARGET.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -R dist
+        shell: bash
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
