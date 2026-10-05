@@ -13,3 +13,7 @@ ritualistic = "0.2.0"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time"] }
 toml = "1.1.6"
+
+# server management isn't in a released ritualistic yet
+[patch.crates-io]
+ritualistic = { path = "../ritualistic" }

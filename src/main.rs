@@ -12,13 +12,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use ritualistic::{
     Event, EventTemplate, Filter, ID, Kind, Network, Occurrence, PubKey, SecretKey,
     SubscriptionOptions, Tag, TagQuery, Tags, Timestamp,
 };
 
 use config::{Config, Follow};
+use ritualistic::management::{self, CallError, Method, PubKeyReason};
 use servers::ServerList;
 
 /// someone's key and the servers we read their notes from.
@@ -84,11 +85,59 @@ enum Command {
 
     /// print your nick and npub, to share with friends
     Whoami,
+
+    /// manage a server you run
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+    },
 }
+
+/// only `own` shows up until you own a server, then only the rest do.
+#[derive(Subcommand)]
+enum ServerCommand {
+    /// manage a server you run from here. it must recognise your key as its owner
+    Own { url: String },
+
+    /// stop managing your server from here (the server itself is left alone)
+    Disown,
+
+    /// let someone publish to your server, by nick or npub
+    Add { who: String },
+
+    /// stop letting someone publish to your server
+    Remove { who: String },
+
+    /// list who can publish to your server
+    Users,
+
+    /// show your server's name, or change it
+    Name { name: Vec<String> },
+
+    /// show your server's description, or change it
+    Description { text: Vec<String> },
+
+    /// show your server's icon, or change it to another image url
+    Icon { url: Option<String> },
+}
+
+const OWNER_COMMANDS: [&str; 7] = [
+    "disown",
+    "add",
+    "remove",
+    "users",
+    "name",
+    "description",
+    "icon",
+];
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // which server commands to show depends on the config, so peek at it first
+    let owns_server = Config::load(&config_arg().unwrap_or_else(Config::default_path))
+        .is_ok_and(|config| config.owned_server.is_some());
+    let cli =
+        Cli::from_arg_matches(&command(owns_server).get_matches()).unwrap_or_else(|err| err.exit());
     let path = cli.config.unwrap_or_else(Config::default_path);
 
     if let Command::Quickstart = cli.command {
@@ -212,6 +261,158 @@ async fn main() -> Result<()> {
             println!("{} {}", bold(&config.nick), config.pubkey()?.to_npub());
             Ok(())
         }
+        Command::Server { command } => server(&mut config, &path, command).await,
+    }
+}
+
+/// the cli, with the server commands that don't apply right now hidden from help.
+fn command(owns_server: bool) -> clap::Command {
+    Cli::command().mut_subcommand("server", |server| {
+        let hidden: &[&str] = if owns_server {
+            &["own"]
+        } else {
+            &OWNER_COMMANDS
+        };
+        hidden.iter().fold(server, |server, name| {
+            server.mut_subcommand(name, |command| command.hide(true))
+        })
+    })
+}
+
+/// the `-c` path, found before clap gets to parse anything.
+fn config_arg() -> Option<PathBuf> {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy();
+        if arg == "-c" || arg == "--config" {
+            return args.next().map(PathBuf::from);
+        }
+        if let Some(path) = arg.strip_prefix("--config=") {
+            return Some(path.into());
+        }
+        if let Some(path) = arg.strip_prefix("-c")
+            && !path.is_empty()
+        {
+            return Some(path.trim_start_matches('=').into());
+        }
+    }
+    None
+}
+
+async fn server(config: &mut Config, path: &Path, command: ServerCommand) -> Result<()> {
+    let secret_key = config.secret_key()?;
+    if let ServerCommand::Own { url } = command {
+        if let Some(owned) = &config.owned_server {
+            bail!("you already own {owned}. `txstr server disown` it first.");
+        }
+        let url =
+            servers::clean(&url).with_context(|| format!("'{url}' isn't a server address"))?;
+        let info = ritualistic::relay_information::fetch(&url)
+            .await
+            .map_err(|err| anyhow::anyhow!("couldn't reach {url}: {err}"))?;
+        management::call_as::<Vec<String>>(&url, &secret_key, &Method::SupportedMethods)
+            .await
+            .map_err(|err| server_error(&url, err))
+            .context("it's there, but doesn't recognise you as its owner")?;
+        config.owned_server = Some(url.clone());
+        config.save(path)?;
+        println!("✓ you now own {} ({url}).", bold(&info.name));
+        println!("  see `txstr server --help` for what you can do with it.");
+        return Ok(());
+    }
+
+    let Some(url) = config.owned_server.clone() else {
+        bail!("you don't own a server yet. try `txstr server own <url>`.");
+    };
+    let call = async |method: Method| {
+        management::call_as::<serde::de::IgnoredAny>(&url, &secret_key, &method)
+            .await
+            .map_err(|err| server_error(&url, err))
+    };
+    let known = config.known();
+
+    match command {
+        ServerCommand::Own { .. } => unreachable!(),
+        ServerCommand::Disown => {
+            config.owned_server = None;
+            config.save(path)?;
+            println!("✓ you no longer manage {url} from here.");
+        }
+        ServerCommand::Add { who } => {
+            let pk = config.resolve(&who)?;
+            call(Method::AllowPubKey(pk, None)).await?;
+            let name = text::display_name(&pk, &known);
+            println!("✓ {name} can now publish to {url}.");
+        }
+        ServerCommand::Remove { who } => {
+            let pk = config.resolve(&who)?;
+            call(Method::UnallowPubKey(pk, None)).await?;
+            let name = text::display_name(&pk, &known);
+            println!("✓ {name} can no longer publish to {url}.");
+        }
+        ServerCommand::Users => {
+            let users: Vec<PubKeyReason> =
+                management::call_as(&url, &secret_key, &Method::ListAllowedPubKeys)
+                    .await
+                    .map_err(|err| server_error(&url, err))?;
+            if users.is_empty() {
+                println!("nobody can publish to {url} yet. try `txstr server add <nick|npub>`.");
+            }
+            for user in users {
+                let mut line = format!(
+                    "➤ {} @ {}",
+                    bold(&text::display_name(&user.pubkey, &known)),
+                    user.pubkey.to_npub()
+                );
+                if let Some(reason) = user.reason {
+                    line += &dim(&format!(" ({reason})"));
+                }
+                println!("{line}");
+            }
+        }
+        ServerCommand::Name { name } if name.is_empty() => {
+            println!("{}", server_info(&url).await?.name);
+        }
+        ServerCommand::Name { name } => {
+            call(Method::ChangeRelayName(name.join(" "))).await?;
+            println!("✓ name changed.");
+        }
+        ServerCommand::Description { text } if text.is_empty() => {
+            println!("{}", server_info(&url).await?.description);
+        }
+        ServerCommand::Description { text } => {
+            call(Method::ChangeRelayDescription(text.join(" "))).await?;
+            println!("✓ description changed.");
+        }
+        ServerCommand::Icon { url: None } => {
+            println!("{}", server_info(&url).await?.icon);
+        }
+        ServerCommand::Icon { url: Some(icon) } => {
+            call(Method::ChangeRelayIcon(icon)).await?;
+            println!("✓ icon changed.");
+        }
+    }
+    Ok(())
+}
+
+async fn server_info(
+    url: &str,
+) -> Result<ritualistic::relay_information::RelayInformationDocument> {
+    ritualistic::relay_information::fetch(url)
+        .await
+        .map_err(|err| anyhow::anyhow!("couldn't reach {url}: {err}"))
+}
+
+/// what went wrong, in terms of the server rather than the library.
+fn server_error(url: &str, err: CallError) -> anyhow::Error {
+    match err {
+        CallError::Relay(message) => anyhow::anyhow!("{url} said: {message}"),
+        CallError::Status(401 | 403) => anyhow::anyhow!("{url} doesn't let you manage it"),
+        CallError::Status(code) => anyhow::anyhow!("{url} answered with HTTP {code}"),
+        CallError::UnexpectedResult(_) => {
+            anyhow::anyhow!("{url} answered with something unexpected")
+        }
+        CallError::Url(_) | CallError::Http(_) => anyhow::anyhow!("couldn't reach {url}: {err}"),
     }
 }
 

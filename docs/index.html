@@ -169,6 +169,16 @@ this wizard will set up txstr for you.
   <li><code>txstr whoami</code>: Output current nick and public key.</li>
 </ul>
 
+<h3>running a server</h3>
+<p>If you run a <a href="https://github.com/andunieee/txstr-server">txstr-server</a> with your key as its admin, you can manage it from here.</p>
+<ul>
+  <li><code>txstr server own &lt;url&gt;</code>: Checks that the server is there and recognises you, then remembers it. The commands below only show up after this.</li>
+  <li><code>txstr server add &lt;nick|npub&gt;</code> / <code>txstr server remove &lt;nick|npub&gt;</code>: Let someone publish to your server, or stop letting them.</li>
+  <li><code>txstr server users</code>: List who can publish.</li>
+  <li><code>txstr server name [name]</code>, <code>txstr server description [text]</code>, <code>txstr server icon [url]</code>: Show these, or change them when given a value.</li>
+  <li><code>txstr server disown</code>: Stop managing it from here. The server itself is left alone.</li>
+</ul>
+
 <h3>global options</h3>
 <ul>
   <li><code>-c, --config &lt;path&gt;</code>: Specify an alternate config file (useful for managing multiple identities).</li>
@@ -199,6 +209,8 @@ npub = "npub1…"</code></pre>
   <dd>Your cryptographic identity (<code>nsec</code> or hex).</dd>
   <dt>servers</dt>
   <dd>Servers txstr publishes to and reads your own notes from. They're announced as your server list whenever they change.</dd>
+  <dt>owned_server</dt>
+  <dd>The server you manage with <code>txstr server</code>, set by <code>txstr server own</code>.</dd>
   <dt>publish_follows</dt>
   <dd>When true, publishes follow lists publicly as petnames for compatibility with other clients.</dd>
   <dt>following.&lt;nick&gt;</dt>

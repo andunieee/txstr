@@ -18,6 +18,10 @@ pub struct Config {
     #[serde(default = "default_servers")]
     pub servers: Vec<String>,
 
+    /// a server you run, managed with `txstr server`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_server: Option<String>,
+
     /// also publish your follow list as a kind 3 event whenever it changes.
     #[serde(default)]
     pub publish_follows: bool,
@@ -119,6 +123,7 @@ impl Config {
             nick,
             secret_key: secret_key.to_nsec(),
             servers: default_servers(),
+            owned_server: None,
             publish_follows: false,
             limit_timeline: default_limit(),
             character_warning: Some(280),
