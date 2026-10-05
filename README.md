@@ -38,7 +38,7 @@ Getting started
     $ cargo install --locked --git https://github.com/andunieee/txstr
     $ txstr quickstart
     $ txstr whoami        # give the output to your friends
-    $ txstr follow ken npub1…
+    $ txstr follow andunie npub1ewsn5m4p2qfvpx2qjfvnghe5ca4phx6d3ccpqad9sr4ccg9utewsfmk8su
     $ txstr tweet "hello world"
     $ txstr timeline
 
@@ -56,13 +56,6 @@ Hacking
 `cargo run --example devrelay` starts an in-memory server on
 `ws://127.0.0.1:7777`. Point a throwaway config at it to try things without
 talking to anyone. `docs/demo/record.sh` re-records the demo above against it.
-
-Under the hood
---------------
-
-txstr speaks [nostr](https://nostr.com), using the
-[ritualistic](https://github.com/andunieee/ritualistic) library, so your notes
-are readable from any other client and you can follow anyone there.
 
 License
 -------
