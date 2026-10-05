@@ -96,6 +96,8 @@
 
 <p>You can send your notes to servers hosted by other people — whether they offer free access or paid options. Hosting text costs almost nothing, but you also don't have to trust server operators not to modify your content. Everything you write is cryptographically signed.</p>
 
+<p>Want to run a server yourself, for you and your friends or for anyone? See <a href="https://github.com/andunieee/txstr-server">txstr-server</a>.</p>
+
 <p>When you post, txstr creates a simple JSON document, signs it with your private key, and sends it to your selected servers. Anyone who wants to read your posts connects to those same servers, requests your signature/key, and verifies that the content came directly from you without tampering.</p>
 
 <p>Your list of servers is published too, so people can find where you write. When you follow someone, txstr looks up their list and remembers a few of their servers next to their nick; your timeline then reads each person from their own servers. If someone goes quiet for over a week, txstr checks whether they've moved and offers to update your config. Notes that mention someone are also delivered to the servers they read from, and a thread is read from the servers of whoever started it, where every reply ends up.</p>
