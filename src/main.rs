@@ -5,7 +5,7 @@ mod config;
 mod seen;
 mod text;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -55,6 +55,9 @@ enum Command {
         /// oldest first
         #[arg(short, long)]
         ascending: bool,
+        /// keep watching for new notes, like tail -f
+        #[arg(short, long)]
+        follow: bool,
     },
 
     /// read a single feed, by nick or npub
@@ -64,6 +67,8 @@ enum Command {
         limit: Option<usize>,
         #[arg(short, long)]
         ascending: bool,
+        #[arg(short, long)]
+        follow: bool,
     },
 
     /// follow someone under a nick of your choosing
@@ -98,21 +103,26 @@ async fn main() -> Result<()> {
             tweet(&config, text, Some(parent)).await
         }
         Command::Thread { hash } => thread(&config, seen::resolve(&hash)?).await,
-        Command::Timeline { limit, ascending } => {
+        Command::Timeline {
+            limit,
+            ascending,
+            follow,
+        } => {
             let mut authors: Vec<PubKey> = config.known().into_iter().map(|(_, pk)| pk).collect();
             authors.dedup();
             if authors.len() <= 1 {
                 eprintln!("you're not following anyone yet. try `txstr follow <nick> <npub>`.");
             }
-            show(&config, authors, limit, ascending).await
+            show(&config, authors, limit, ascending, follow).await
         }
         Command::View {
             who,
             limit,
             ascending,
+            follow,
         } => {
             let pk = config.resolve(&who)?;
-            show(&config, vec![pk], limit, ascending).await
+            show(&config, vec![pk], limit, ascending, follow).await
         }
         Command::Follow { nick, npub } => {
             let pk: PubKey = npub
@@ -357,11 +367,12 @@ async fn show(
     authors: Vec<PubKey>,
     limit: Option<usize>,
     ascending: bool,
+    follow: bool,
 ) -> Result<()> {
     let limit = limit.unwrap_or(config.limit_timeline);
     let filter = Filter {
         kinds: Some(vec![Kind(1)]),
-        authors: Some(authors),
+        authors: Some(authors.clone()),
         limit: Some(limit),
         ..Default::default()
     };
@@ -369,7 +380,8 @@ async fn show(
     let mut events = fetch(config, filter).await;
     events.sort_by_key(|e| std::cmp::Reverse(e.created_at.0));
     events.truncate(limit);
-    if ascending {
+    // like tail -f, new notes show up at the bottom, so the history goes oldest first too
+    if ascending || follow {
         events.reverse();
     }
 
@@ -378,7 +390,46 @@ async fn show(
         print_note(event, &known, "");
     }
     seen::remember(events.iter().flat_map(hashes_shown));
+
+    if follow {
+        let since = events.iter().map(|e| e.created_at.0).max();
+        let seen = events.iter().map(|e| e.id).collect();
+        watch(config, authors, since, seen).await;
+    }
     Ok(())
+}
+
+/// streams new notes until interrupted, resubscribing if every relay drops us.
+async fn watch(config: &Config, authors: Vec<PubKey>, since: Option<u32>, mut seen: HashSet<ID>) {
+    let known = config.known();
+    let mut since = since.unwrap_or(Timestamp::now().0);
+    let network = Network::new();
+    loop {
+        let filter = Filter {
+            kinds: Some(vec![Kind(1)]),
+            authors: Some(authors.clone()),
+            since: Some(Timestamp(since)),
+            ..Default::default()
+        };
+        let mut occurrences = network
+            .subscribe(&config.relays, filter, SubscriptionOptions::default())
+            .await;
+        while let Some(occ) = occurrences.recv().await {
+            match occ {
+                Occurrence::Event(event, _)
+                    if event.verify_signature() && seen.insert(event.id) =>
+                {
+                    since = since.max(event.created_at.0);
+                    print_note(&event, &known, "");
+                    seen::remember(hashes_shown(&event));
+                }
+                Occurrence::Close => break,
+                _ => {}
+            }
+        }
+        eprintln!("  … lost every relay, reconnecting in 30s");
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
 }
 
 /// prints the whole conversation `id` is part of, as an indented tree.

@@ -27,6 +27,7 @@ Features
 - `@nick` mentions for the people you follow.
 - Git-style short hashes on every note: `txstr reply a1b2c3d "same"`,
   `txstr thread a1b2c3d` to read the whole conversation.
+- `txstr timeline -f` keeps watching for new notes, like `tail -f`.
 - Plays well with your shell: `fortune | txstr tweet`,
   `txstr timeline | less`, `txstr view ken | grep -i rust`.
 
