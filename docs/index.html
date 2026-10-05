@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>txstr</title>
-<meta name="description" content="a decentralised, minimalist microblogging network for hackers">
+<meta name="description" content="txstr is a text-centric, minimalist social ecosystem for publishing thoughts on the internet">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14' font-family='monospace'>➤</text></svg>">
 <style>
   :root {
@@ -72,150 +72,112 @@
 <main>
 
 <h1>txstr</h1>
-<p class="tagline">a decentralised, minimalist microblogging network for hackers.</p>
+<p class="tagline">a text-centric, minimalist social ecosystem for publishing thoughts on the internet.</p>
 
 <nav>
+  <a href="#how-it-works">how it works</a>
   <a href="#install">install</a>
   <a href="#quickstart">quickstart</a>
   <a href="#commands">commands</a>
   <a href="#config">config</a>
-  <a href="#etiquette">etiquette</a>
   <a href="#hacking">hacking</a>
-  <a href="#under-the-hood">under the hood</a>
+  <a href="#protocol">protocol</a>
   <a href="https://github.com/andunieee/txstr">source</a>
 </nav>
 
-<p>So you want to get some thoughts out into the world while also following the
-gibberish of a few people you actually find interesting? Instead of signing up for
-yet another closed platform with an algorithm deciding what you see, txstr gives
-you a nick, a keypair and a terminal.</p>
+<p>txstr is a text-centric, minimalist social ecosystem for publishing thoughts on the internet.</p>
 
-<p>Your keypair is your identity, your account. Nobody hands it to you and nobody
-can take it away. Your timeline is built from exactly the people you follow. There's
-no ranking, no likes, no reposts, no ads and no "who to follow". You find people the
-old way: someone hands you their key.</p>
+<p>No algorithms. No feed manipulation. No likes, reposts, ads, or recommended content. Your identity is a keypair, your account lives on your machine, and your timeline contains only the people you explicitly follow.</p>
 
 <img src="demo.gif" alt="a terminal session: txstr whoami, following, timeline, follow, view, tweet, reply, thread" width="965" height="605">
 
-<h2 id="install">install</h2>
+<h2 id="how-it-works">how it works under the hood</h2>
+
+<p>Conceptually, txstr is a bit like RSS or twtxt: you get someone's identity, you follow them, and you read their posts. But unlike RSS or self-hosted twtxt files, you don't need to run your own server to publish.</p>
+
+<p>You can send your notes to servers hosted by other people — whether they offer free access or paid options. Hosting text costs almost nothing, but you also don't have to trust server operators not to modify your content. Everything you write is cryptographically signed.</p>
+
+<p>When you post, txstr creates a simple JSON document, signs it with your private key, and sends it to your selected servers. Anyone who wants to read your posts connects to those same servers, requests your signature/key, and verifies that the content came directly from you without tampering.</p>
+
+<h2 id="install">installation</h2>
+
+<p>Requires a stable Rust toolchain (1.91+).</p>
 
 <pre><code><span class="p">$ </span>cargo install --locked --git https://github.com/andunieee/txstr</code></pre>
 
-<p>You'll need a stable Rust toolchain, 1.91 or newer. Don't drop <code>--locked</code>: it makes
-cargo build against the exact dependency versions txstr ships with. Run the same
-command again to update. Building from a clone works too with plain
-<code>cargo install --locked --path .</code></p>
+<p><em>Note: Always use <code>--locked</code> to build against tested dependency versions. Run the command again anytime to update.</em></p>
 
 <h2 id="quickstart">quickstart</h2>
 
-<pre><code><span class="p">$ </span>txstr quickstart
-txstr - quickstart
+<p>Run the setup wizard:</p>
+
+<pre><code><span class="p">$ </span>txstr quickstart</code></pre>
+
+<pre><code>txstr - quickstart
 ==================
 
 this wizard will set up txstr for you.
 
 ➤ please enter your desired nick [you]: ghost
 ➤ paste an existing nsec, or leave empty to generate a fresh key:
-➤ relays to talk to, space separated [wss://relay.damus.io wss://nos.lol wss://relay.primal.net]:
+➤ servers to talk to, space separated [wss://wheat.happytavern.co wss://soloco.nl]:
 ➤ publish your follow list too, so other clients can see it? (y/N):
 
 ✓ created config file at ~/.config/txstr/config.toml
 ✓ you are ghost — tell your friends:
   txstr follow ghost npub1…</code></pre>
 
-<p>That last line is your calling card. Paste it in a chat, put it in your
-<code>.plan</code>, print it on a sticker.</p>
+<p>Share that generated command (<code>txstr follow &lt;nick&gt; &lt;npub&gt;</code>) with anyone who wants to subscribe to your feed.</p>
 
 <h2 id="commands">commands</h2>
 
-<h3>txstr tweet [text…]</h3>
-<p>Posts a note. Aliased as <code>post</code>. With arguments it posts them directly.
-Piped input is read from stdin, so it composes with anything. With neither it
-opens <code>$VISUAL</code> or <code>$EDITOR</code> (falling back to <code>vi</code>),
-so a bare <code>txstr tweet</code> drops you in your editor:</p>
-<pre><code><span class="p">$ </span>txstr tweet "compiling, brb"
-<span class="p">$ </span>txstr tweet
-<span class="p">$ </span>fortune -s | txstr tweet
-<span class="p">$ </span>uptime | txstr post</code></pre>
-<p>If the note is longer than <code>character_warning</code>, txstr asks before
-sending it. Be brief. After posting it prints the note's short hash.</p>
+<h3>writing &amp; publishing</h3>
+<ul>
+  <li><code>txstr tweet [text...]</code> (or <code>txstr post [text...]</code>)</li>
+  <li>Post directly: <code>txstr tweet "compiling, brb"</code></li>
+  <li>Pipe input: <code>fortune -s | txstr tweet</code> or <code>uptime | txstr post</code></li>
+  <li>Bare command: <code>txstr tweet</code> opens <code>$VISUAL</code> or <code>$EDITOR</code> (falls back to <code>vi</code>).</li>
+  <li>Notes exceeding <code>character_warning</code> require confirmation before sending. Returns a git-style short hash upon posting.</li>
+</ul>
 
-<h3>txstr timeline [-l N] [-a] [-f]</h3>
-<p>Shows the latest notes from everyone you follow, plus your own, newest first.
-<code>-l</code> sets how many, <code>-a</code> flips the order to oldest first,
-<code>-f</code> keeps watching for new notes, like <code>tail -f</code>, until
-you interrupt it. Every note prints with its git-style short hash, and replies
-point at their parent:</p>
-<pre><code><span class="p">$ </span>txstr timeline -l 2
-➤ ken (40 minutes ago) [a1b2c3d]:
-my homelab uptime is longer than most of my relationships
+<h3>reading &amp; viewing</h3>
+<ul>
+  <li><code>txstr timeline [-l N] [-a] [-f]</code><br>Shows notes from people you follow and your own, newest first.</li>
+  <li><code>-l N</code>: Limit output to N notes.</li>
+  <li><code>-a</code>: Display oldest first.</li>
+  <li><code>-f</code>: Follow feed continuously (like <code>tail -f</code>).</li>
+</ul>
+<ul>
+  <li><code>txstr view &lt;nick|npub&gt; [-l N] [-a] [-f]</code><br>Inspect a single user's feed (works for followed nicks, raw <code>npub</code>, <code>nprofile</code>, or hex keys).</li>
+  <li><code>txstr thread &lt;hash&gt;</code><br>Displays a note's conversation tree by its short hash.</li>
+</ul>
 
-➤ ada (2 hours ago) [e4f5a6b] ↪ [c7d8e9f]:
-@ken the man page agrees with you</code></pre>
-<p>Pipe it through <code>less</code> or <code>grep</code>; colors turn off when the
-output isn't a terminal.</p>
+<h3>replying &amp; mentions</h3>
+<ul>
+  <li><code>txstr reply &lt;hash&gt; [text...]</code><br>Reply to a note by its short hash (e.g. <code>txstr reply a1b2c3d "agreed"</code>).</li>
+  <li><strong>Mentions</strong>: Typing <code>@nick</code> addresses anyone in your follow list. Mentions render as <code>@nick</code> for recognized users and shortened public keys (<code>@npub1...</code>) for strangers.</li>
+</ul>
 
-<h3>txstr view &lt;nick|npub&gt; [-l N] [-a] [-f]</h3>
-<p>Same as <code>timeline</code>, but for a single person, with the same
-<code>-l</code>/<code>-a</code>/<code>-f</code> flags. Works for people you
-don't follow, too: just pass their key. <code>who</code> accepts a nick from
-your follow list (with or without a leading <code>@</code>), your own nick, or
-an npub, nprofile or hex key directly.</p>
+<h3>follow list &amp; identity</h3>
+<ul>
+  <li><code>txstr follow &lt;nick&gt; &lt;npub&gt;</code>: Add someone using a local alias.</li>
+  <li><code>txstr unfollow &lt;nick&gt;</code>: Remove someone locally.</li>
+  <li><code>txstr following</code>: List all followed users.</li>
+  <li><code>txstr whoami</code>: Output current nick and public key.</li>
+</ul>
 
-<h3>txstr reply &lt;hash&gt; [text…]</h3>
-<p>Replies to a note, addressed by its short hash — the <code>[a1b2c3d]</code> printed
-next to every note. Like <code>tweet</code>, it posts its arguments, reads piped
-stdin, or opens your editor when given neither. The hash can be a short prefix,
-a full hex id, a <code>note1…</code> or <code>nevent1…</code> reference, optionally
-wrapped in <code>[]</code>:</p>
-<pre><code><span class="p">$ </span>txstr reply a1b2c3d "man grep is 2000 lines. ken was right"
-<span class="p">$ </span>echo "same here" | txstr reply a1b2c3d</code></pre>
-<p>Hashes only work for notes txstr has already printed — each
-<code>timeline</code>, <code>view</code> and <code>thread</code> remembers what it
-showed, git style. If it complains it hasn't seen a hash, read the note first
-and copy the hash from there. Replies carry NIP-10 threading tags, so other
-clients render them in place.</p>
+<h3>global options</h3>
+<ul>
+  <li><code>-c, --config &lt;path&gt;</code>: Specify an alternate config file (useful for managing multiple identities).</li>
+</ul>
 
-<h3>txstr thread &lt;hash&gt;</h3>
-<p>Shows the whole conversation a note belongs to, as an indented tree with the
-same short hashes:</p>
-<pre><code><span class="p">$ </span>txstr thread a1b2c3d</code></pre>
+<h2 id="config">configuration</h2>
 
-<h3>txstr follow &lt;nick&gt; &lt;npub&gt;</h3>
-<p>Adds someone to your follow list under a nick of your choosing. Nicks are
-local and personal: you can call people whatever helps you remember them.
-A leading <code>@</code> on the nick is ignored, so pasting one is fine.</p>
-
-<h3>txstr unfollow &lt;nick&gt;</h3>
-<p>Removes them; a leading <code>@</code> is fine here too. No notification is sent. Nobody's feelings get hurt.</p>
-
-<h3>txstr following</h3>
-<p>Lists everyone you follow, one per line. Pipe it, diff it, share it.</p>
-
-<h3>txstr whoami</h3>
-<p>Prints your nick and your public key.</p>
-
-<h3>mentions</h3>
-<p>Writing <code>@nick</code> for someone you follow turns into a real mention that
-their client will notice. A trailing dot is punctuation, not part of the nick, and
-addresses like <code>mail@example.com</code> are left alone. When you read notes, mentions of people you know show up
-as <code>@nick</code> again, and everyone else is shown shortened, like
-<code>@npub1abc…1234</code>.</p>
-
-<h3>global flags</h3>
-<p><code>-c, --config &lt;path&gt;</code> uses a different config file, handy for
-running several identities or a throwaway test setup. <code>txstr --help</code>
-and <code>txstr &lt;command&gt; --help</code> print the rest.</p>
-
-<h2 id="config">config</h2>
-
-<p>Everything lives in <code>~/.config/txstr/config.toml</code>. It's meant to be
-read and edited by hand. It also holds your secret key, so txstr writes it with
-<code>0600</code> permissions; keep it that way and keep it out of public dotfiles.</p>
+<p>Configuration is stored at <code>~/.config/txstr/config.toml</code> (created with <code>0600</code> file permissions to secure private keys).</p>
 
 <pre><code>nick = "ghost"
 secret_key = "nsec1…"
-relays = ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net"]
+servers = ["wss://soloco.nl", "wss://nos.lol"]
 publish_follows = false
 limit_timeline = 20
 character_warning = 280
@@ -226,54 +188,33 @@ ada = "npub1…"
 ken = "npub1…"</code></pre>
 
 <dl>
-  <dt>nick</dt>
-  <dd>What you call yourself, and how your own notes show up in your timeline.</dd>
   <dt>secret_key</dt>
-  <dd>Your identity, as an nsec or hex key. Lose it and you're starting over; leak it and someone else is you.</dd>
-  <dt>relays</dt>
-  <dd>The servers txstr talks to. Notes go to all of them and are read from all of
-  them, so any one of them going away doesn't matter much. Run your own if you like.</dd>
+  <dd>Your cryptographic identity (<code>nsec</code> or hex).</dd>
+  <dt>servers</dt>
+  <dd>Servers txstr publishes to and fetches from.</dd>
   <dt>publish_follows</dt>
-  <dd>Off by default: your follow list stays in this file. Turn it on and every
-  <code>follow</code>/<code>unfollow</code> also publishes the list, with your nicks
-  attached, so other clients can see it. If you already have a published list from
-  another client, txstr merges into it instead of replacing it.</dd>
-  <dt>limit_timeline</dt>
-  <dd>How many notes <code>timeline</code> and <code>view</code> show by default.</dd>
-  <dt>character_warning</dt>
-  <dd>Ask before posting anything longer than this. Remove the line to never ask.</dd>
-  <dt>timeout</dt>
-  <dd>Seconds to wait on slow servers before moving on.</dd>
-  <dt>[following]</dt>
-  <dd>nick = key, one per line, in whatever order you like.</dd>
+  <dd>When true, publishes follow lists publicly as petnames for compatibility with other clients.</dd>
 </dl>
 
-<h2 id="etiquette">etiquette</h2>
+<h2 id="hacking">local development</h2>
+
+<p>Run an in-memory server locally to test without connecting to external networks:</p>
+
+<pre><code><span class="p">$ </span>cargo run --example devserver
+<span class="p">$ </span>txstr -c dev.toml quickstart <span class="c"># use ws://127.0.0.1:7777 as the server</span></code></pre>
+
+<h2 id="protocol">protocol compatibility</h2>
+
+<p>txstr signs JSON notes behind the scenes via the <a href="https://github.com/andunieee/ritualistic">ritualistic</a> crate:</p>
 
 <ul>
-  <li>Say things worth reading. Nobody is grading you on frequency.</li>
-  <li>Share your <code>txstr following</code> with friends. That's how people find each other here.</li>
-  <li>Text is the medium. If it needs a screenshot, it probably needs a blog post.</li>
-  <li>Be kind. It's a small place.</li>
+  <li>Standard notes are published as <code>kind 1</code> events.</li>
+  <li>Replies use thread markers.</li>
+  <li>Mentions use <code>p</code> tags.</li>
+  <li>Public follow lists are exported as <code>kind 3</code> events.</li>
 </ul>
 
-<h2 id="hacking">hacking</h2>
-
-<p>The repository ships a tiny in-memory server for trying things without talking
-to anyone:</p>
-<pre><code><span class="p">$ </span>cargo run --example devrelay   <span class="c"># ws://127.0.0.1:7777</span>
-<span class="p">$ </span>txstr -c dev.toml quickstart     <span class="c"># and give it ws://127.0.0.1:7777 as the relay</span></code></pre>
-<p>The demo on this page is recorded against it with <code>docs/demo/record.sh</code>.
-Patches welcome.</p>
-
-<h2 id="under-the-hood">under the hood</h2>
-
-<p>txstr speaks <a href="https://nostr.com">nostr</a>, through the
-<a href="https://github.com/andunieee/ritualistic">ritualistic</a> library. Notes are
-plain kind 1 events, mentions are NIP-27 references with <code>p</code> tags, and a
-published follow list is a NIP-02 kind 3 event with your nicks as petnames. Which
-means your notes are readable from any other client, and anyone there is one
-<code>txstr follow</code> away.</p>
+<p>All notes published through txstr remain accessible from any standard client.</p>
 
 <footer>txstr is released under the MIT license.</footer>
 

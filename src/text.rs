@@ -1,9 +1,9 @@
-//! turning `@nick` into `nostr:npub…` on the way out, and back again on the way in,
+//! turning `@nick` into key references on the way out, and back again on the way in,
 //! and working out where a note sits in a thread.
 
-use ritualistic::{ID, PubKey, Tag};
+use ritualistic::{PubKey, Tag, ID};
 
-/// expands `@nick` for people in your follow list into nip-27 references,
+/// expands `@nick` for people in your follow list into mention references,
 /// returning the new content and the `p` tags to go with it.
 pub fn expand_mentions(content: &str, known: &[(String, PubKey)]) -> (String, Vec<Tag>) {
     let mut out = String::with_capacity(content.len());
@@ -43,7 +43,7 @@ pub fn expand_mentions(content: &str, known: &[(String, PubKey)]) -> (String, Ve
     (out, tags)
 }
 
-/// renders `nostr:npub…`/`nostr:nprofile…` references as `@nick` when we know them.
+/// renders `npub…`/`nprofile…` references as `@nick` when we know them.
 pub fn collapse_mentions(content: &str, known: &[(String, PubKey)]) -> String {
     let mut out = String::with_capacity(content.len());
     let mut rest = content;
@@ -82,7 +82,7 @@ pub fn short_npub(pk: &PubKey) -> String {
     format!("{}…{}", &npub[..9], &npub[npub.len() - 4..])
 }
 
-/// the (root, parent) a note replies to, per nip-10. marked `e` tags win; older
+/// the (root, parent) a note replies to. marked `e` tags win; older
 /// clients just list them in order, first being the root and last the parent.
 pub fn thread_refs(tags: &[Tag]) -> (Option<ID>, Option<ID>) {
     let e_tags: Vec<&Tag> = tags

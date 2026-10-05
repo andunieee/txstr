@@ -1,5 +1,5 @@
 //! txstr: a tiny, decentralised microblogging client for the command line.
-//! twtxt's spirit, nostr's plumbing.
+//! twtxt's spirit, signed JSON plumbing.
 
 mod config;
 mod seen;
@@ -22,7 +22,7 @@ use config::Config;
 #[derive(Parser)]
 #[command(
     version,
-    about = "decentralised, minimalist microblogging for hackers, over nostr"
+    about = "decentralised, minimalist microblogging for hackers"
 )]
 struct Cli {
     /// path to the config file
@@ -35,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// set up your nick, key and relays
+    /// set up your nick, key and servers
     Quickstart,
 
     /// post a note (reads stdin when piped, opens $EDITOR otherwise)
@@ -211,7 +211,7 @@ async fn tweet(config: &Config, words: Vec<String>, parent: Option<Event>) -> Re
     let ok = publish(config, event).await?;
     seen::remember([id]);
     println!(
-        "✓ posted {} to {ok} relay{}.",
+        "✓ posted {} to {ok} server{}.",
         seen::short(&id),
         if ok == 1 { "" } else { "s" }
     );
@@ -242,7 +242,7 @@ fn compose() -> Result<String> {
     Ok(text?)
 }
 
-/// nip-10 marked tags for a reply: point at the thread's root and at the
+/// marked tags for a reply: point at the thread's root and at the
 /// parent, and notify everyone who was already in the conversation.
 fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
     let parent_hex = parent.id.to_hex();
@@ -290,16 +290,16 @@ fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
     thread
 }
 
-/// sends an event to all configured relays, returning how many accepted it.
+/// sends an event to all configured servers, returning how many accepted it.
 async fn publish(config: &Config, event: Event) -> Result<usize> {
     let mut network = Network::new();
-    let mut results = network.publish_many(&config.relays, event).await;
+    let mut results = network.publish_many(&config.servers, event).await;
     let deadline = tokio::time::sleep(Duration::from_secs(config.timeout));
     tokio::pin!(deadline);
 
     let mut ok = 0;
     let mut seen = 0;
-    while seen < config.relays.len() {
+    while seen < config.servers.len() {
         tokio::select! {
             result = results.recv() => match result {
                 Some(result) => {
@@ -312,21 +312,21 @@ async fn publish(config: &Config, event: Event) -> Result<usize> {
                 None => break,
             },
             _ = &mut deadline => {
-                eprintln!("  … gave up waiting on the remaining relays");
+                eprintln!("  … gave up waiting on the remaining servers");
                 break;
             }
         }
     }
 
     if ok == 0 {
-        bail!("no relay accepted the event");
+        bail!("no server accepted the event");
     }
     Ok(ok)
 }
 
 /// publishes the follow list as a kind 3 event. kind 3 is replaceable, so to
 /// avoid wiping out follows made from other clients we start from the latest
-/// one on the relays, drop whoever was just unfollowed, and lay ours on top.
+/// one on the servers, drop whoever was just unfollowed, and lay ours on top.
 async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<()> {
     let me = config.pubkey()?;
     let previous = fetch(
@@ -343,7 +343,7 @@ async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<
     .filter(|e| e.pubkey == me)
     .max_by_key(|e| e.created_at.0);
 
-    // nip-02 petnames are exactly what our nicks are
+    // petnames are exactly what our nicks are
     let mut tags: Vec<Tag> = config
         .following
         .iter()
@@ -382,7 +382,7 @@ async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<
 
     let ok = publish(config, event).await?;
     println!(
-        "✓ follow list published to {ok} relay{}.",
+        "✓ follow list published to {ok} server{}.",
         if ok == 1 { "" } else { "s" }
     );
     Ok(())
@@ -425,7 +425,7 @@ async fn show(
     Ok(())
 }
 
-/// streams new notes until interrupted, resubscribing if every relay drops us.
+/// streams new notes until interrupted, resubscribing if every server drops us.
 async fn watch(config: &Config, authors: Vec<PubKey>, since: Option<u32>, mut seen: HashSet<ID>) {
     let known = config.known();
     let mut since = since.unwrap_or(Timestamp::now().0);
@@ -438,7 +438,7 @@ async fn watch(config: &Config, authors: Vec<PubKey>, since: Option<u32>, mut se
             ..Default::default()
         };
         let mut occurrences = network
-            .subscribe(&config.relays, filter, SubscriptionOptions::default())
+            .subscribe(&config.servers, filter, SubscriptionOptions::default())
             .await;
         while let Some(occ) = occurrences.recv().await {
             match occ {
@@ -453,7 +453,7 @@ async fn watch(config: &Config, authors: Vec<PubKey>, since: Option<u32>, mut se
                 _ => {}
             }
         }
-        eprintln!("  … lost every relay, reconnecting in 30s");
+        eprintln!("  … lost every server, reconnecting in 30s");
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }
@@ -540,7 +540,7 @@ fn print_note(event: &Event, known: &[(String, PubKey)], indent: &str) {
     println!();
 }
 
-/// fetches a single note by id, or complains that no relay has it.
+/// fetches a single note by id, or complains that no server has it.
 async fn fetch_one(config: &Config, id: ID) -> Result<Event> {
     let filter = Filter {
         ids: Some(vec![id]),
@@ -550,14 +550,14 @@ async fn fetch_one(config: &Config, id: ID) -> Result<Event> {
         .await
         .into_iter()
         .find(|e| e.id == id)
-        .with_context(|| format!("none of your relays has note {}", seen::short(&id)))
+        .with_context(|| format!("none of your servers has note {}", seen::short(&id)))
 }
 
-/// collects events until every relay says EOSE or we run out of patience.
+/// collects events until every server says EOSE or we run out of patience.
 async fn fetch(config: &Config, filter: Filter) -> Vec<Event> {
     let network = Network::new();
     let mut occurrences = network
-        .subscribe(&config.relays, filter, SubscriptionOptions::default())
+        .subscribe(&config.servers, filter, SubscriptionOptions::default())
         .await;
     let deadline = tokio::time::sleep(Duration::from_secs(config.timeout));
     tokio::pin!(deadline);
@@ -606,11 +606,11 @@ fn quickstart(path: &std::path::Path) -> Result<()> {
 
     let mut config = Config::new(nick, &secret_key);
 
-    let relays = ask(
-        "➤ relays to talk to, space separated",
-        &config.relays.join(" "),
+    let servers = ask(
+        "➤ servers to talk to, space separated",
+        &config.servers.join(" "),
     )?;
-    config.relays = relays.split_whitespace().map(String::from).collect();
+    config.servers = servers.split_whitespace().map(String::from).collect();
 
     config.publish_follows =
         confirm("➤ publish your follow list too, so other clients can see it?")?;

@@ -1,13 +1,13 @@
 #!/bin/bash
-# re-records docs/demo.gif against a throwaway local relay full of made-up people.
+# re-records docs/demo.gif against a throwaway local server full of made-up people.
 # needs: asciinema, agg (https://github.com/asciinema/agg), nak (https://github.com/fiatjaf/nak), jq
 set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 export WORK=$(mktemp -d)
-trap 'kill $RELAY 2>/dev/null; rm -rf "$WORK"' EXIT
+trap 'kill $SERVER 2>/dev/null; rm -rf "$WORK"' EXIT
 
 cargo build -q --release --manifest-path "$ROOT/Cargo.toml" --bins --examples
-"$ROOT/target/release/examples/devrelay" 2>/dev/null & RELAY=$!
+"$ROOT/target/release/examples/devserver" 2>/dev/null & SERVER=$!
 sleep 0.5
 
 R=ws://127.0.0.1:7777
@@ -36,7 +36,7 @@ mkdir -p "$WORK/config/txstr"
 cat > "$WORK/config/txstr/config.toml" << CFG
 nick = "ghost"
 secret_key = "$ghost_sk"
-relays = ["$R"]
+servers = ["$R"]
 timeout = 2
 
 [following]

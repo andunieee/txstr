@@ -1,7 +1,7 @@
-//! a throwaway in-memory relay, for trying txstr without bothering anyone.
+//! a throwaway in-memory server, for trying txstr without bothering anyone.
 //!
-//!     cargo run --example devrelay            # listens on ws://127.0.0.1:7777
-//!     txstr -c dev.toml ...                   # with relays = ["ws://127.0.0.1:7777"]
+//!     cargo run --example devserver            # listens on ws://127.0.0.1:7777
+//!     txstr -c dev.toml ...                   # with servers = ["ws://127.0.0.1:7777"]
 
 use std::sync::Arc;
 
@@ -54,8 +54,8 @@ async fn main() {
         info: Default::default(),
         custom_relay: Box::new(tokio::sync::Mutex::new(Memory::default())),
     });
-    eprintln!("devrelay listening on ws://{addr}");
+    eprintln!("devserver listening on ws://{addr}");
     start(internals, addr.parse().expect("invalid address"))
         .await
-        .expect("relay crashed");
+        .expect("server crashed");
 }

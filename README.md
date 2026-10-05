@@ -1,63 +1,44 @@
 txstr
 =====
 
-**txstr** is a decentralised, minimalist microblogging network for hackers.
+txstr is a text-centric, minimalist social ecosystem for publishing thoughts
+on the internet.
 
-So you want to get some thoughts out into the world while also following the
-gibberish of a few people you actually find interesting? Instead of signing up
-for yet another closed platform with an algorithm deciding what you see,
-txstr gives you a nick, a keypair and a terminal. Your keypair is your
-identity, your account; nobody hands it to you and nobody can take it away.
-Your timeline is built from exactly the people you follow — no ranking, no
-likes, no reposts, no ads, no "who to follow". You find people the old way:
-someone hands you their key.
+No algorithms. No feed manipulation. No likes, reposts, ads, or recommended
+content. Your identity is a keypair, your account lives on your machine, and
+your timeline contains only the people you explicitly follow.
 
 ![demo](docs/demo.gif)
 
-**tl;dr**: txstr is a CLI for a tiny, text-only social network with no
-center, where your follow list is a file you own.
-
-Features
---------
-
-- A fast, single-binary command-line client, written in Rust.
-- Talks to several independent servers at once, so no single one owns you.
-- Your follow list is a plain TOML file, with nicks *you* chose. Read it,
-  edit it, grep it, put it in your dotfiles.
-- `@nick` mentions for the people you follow.
-- Git-style short hashes on every note: `txstr reply a1b2c3d "same"`,
-  `txstr thread a1b2c3d` to read the whole conversation.
-- `txstr timeline -f` keeps watching for new notes, like `tail -f`.
-- `txstr tweet` with no text opens `$EDITOR`.
-- Plays well with your shell: `fortune | txstr tweet`,
-  `txstr timeline | less`, `txstr view ken | grep -i rust`.
+Conceptually, txstr is a bit like RSS or twtxt: you get someone's identity,
+you follow them, and you read their posts. No server needed to publish --
+send signed notes to servers hosted by others and anyone can verify them.
 
 Getting started
 ---------------
 
     $ cargo install --locked --git https://github.com/andunieee/txstr
     $ txstr quickstart
-    $ txstr whoami        # give the output to your friends
-    $ txstr follow andunie npub1ewsn5m4p2qfvpx2qjfvnghe5ca4phx6d3ccpqad9sr4ccg9utewsfmk8su
+    $ txstr follow ghost npub1…
     $ txstr tweet "hello world"
     $ txstr timeline
 
-txstr needs Rust 1.91 or newer, and `--locked` matters: it builds against
-the exact dependency versions in `Cargo.lock`.
+Requires Rust 1.91+. Always use `--locked`. Run install again to update.
 
 Documentation
 -------------
 
-Check out the full documentation at: https://andunieee.github.io/txstr/
+Full docs (commands, config, how it works): https://andunieee.github.io/txstr/
 
 Hacking
 -------
 
-`cargo run --example devrelay` starts an in-memory server on
-`ws://127.0.0.1:7777`. Point a throwaway config at it to try things without
-talking to anyone. `docs/demo/record.sh` re-records the demo above against it.
+`cargo run --example devserver` starts an in-memory server on
+`ws://127.0.0.1:7777`. Point a throwaway config at it (`txstr -c dev.toml
+quickstart`) to try things without talking to anyone.
 
 License
 -------
 
-txstr is released under the MIT License.
+txstr is released under the MIT License. Notes are signed JSON (`kind 1`,
+thread markers, mention tags, `kind 3` follows) and stay readable from any standard client.

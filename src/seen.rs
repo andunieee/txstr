@@ -1,4 +1,4 @@
-//! short hashes, git style. relays only look notes up by their full id, so we
+//! short hashes, git style. servers only look notes up by their full id, so we
 //! remember every id we've printed and expand prefixes against that list.
 
 use std::io::Write;

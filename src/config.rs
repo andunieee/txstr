@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use ritualistic::{PubKey, SecretKey};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_RELAYS: [&str; 3] = [
-    "wss://relay.damus.io",
-    "wss://nos.lol",
-    "wss://relay.primal.net",
+pub const DEFAULT_SERVERS: [&str; 2] = [
+    "wss://wheat.happytavern.co",
+    "wss://soloco.nl",
 ];
 
 /// everything txstr knows about you lives in one small, hand-editable toml file.
@@ -19,8 +18,8 @@ pub struct Config {
     /// nsec or hex. this file is created with 0600 permissions, keep it that way.
     pub secret_key: String,
 
-    #[serde(default = "default_relays")]
-    pub relays: Vec<String>,
+    #[serde(default = "default_servers")]
+    pub servers: Vec<String>,
 
     /// also publish your follow list as a kind 3 event whenever it changes.
     #[serde(default)]
@@ -42,8 +41,8 @@ pub struct Config {
     pub following: BTreeMap<String, String>,
 }
 
-fn default_relays() -> Vec<String> {
-    DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect()
+fn default_servers() -> Vec<String> {
+    DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
 }
 
 fn default_limit() -> usize {
@@ -66,7 +65,7 @@ impl Config {
         Self {
             nick,
             secret_key: secret_key.to_nsec(),
-            relays: default_relays(),
+            servers: default_servers(),
             publish_follows: false,
             limit_timeline: default_limit(),
             character_warning: Some(280),
