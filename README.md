@@ -25,7 +25,8 @@ Features
 - Your follow list is a plain TOML file, with nicks *you* chose. Read it,
   edit it, grep it, put it in your dotfiles.
 - `@nick` mentions for the people you follow.
-- Git-style short hashes on every note.
+- Git-style short hashes on every note: `txstr reply a1b2c3d "same"`,
+  `txstr thread a1b2c3d` to read the whole conversation.
 - Plays well with your shell: `fortune | txstr tweet`,
   `txstr timeline | less`, `txstr view ken | grep -i rust`.
 

@@ -5,6 +5,7 @@ mod config;
 mod seen;
 mod text;
 
+use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,7 +14,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use ritualistic::{
     Event, EventTemplate, Filter, ID, Kind, Network, Occurrence, PubKey, SecretKey,
-    SubscriptionOptions, Tag, Tags, Timestamp,
+    SubscriptionOptions, Tag, TagQuery, Tags, Timestamp,
 };
 
 use config::Config;
@@ -40,6 +41,12 @@ enum Command {
     /// post a note (reads stdin when no text is given)
     #[command(alias = "post")]
     Tweet { text: Vec<String> },
+
+    /// reply to a note, by its short hash
+    Reply { hash: String, text: Vec<String> },
+
+    /// show the whole conversation a note belongs to
+    Thread { hash: String },
 
     /// read what the people you follow have been saying
     Timeline {
@@ -84,7 +91,13 @@ async fn main() -> Result<()> {
     let mut config = Config::load(&path)?;
     match cli.command {
         Command::Quickstart => unreachable!(),
-        Command::Tweet { text } => tweet(&config, text).await,
+        Command::Tweet { text } => tweet(&config, text, None).await,
+        Command::Reply { hash, text } => {
+            let id = seen::resolve(&hash)?;
+            let parent = fetch_one(&config, id).await?;
+            tweet(&config, text, Some(parent)).await
+        }
+        Command::Thread { hash } => thread(&config, seen::resolve(&hash)?).await,
         Command::Timeline { limit, ascending } => {
             let mut authors: Vec<PubKey> = config.known().into_iter().map(|(_, pk)| pk).collect();
             authors.dedup();
@@ -146,7 +159,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn tweet(config: &Config, words: Vec<String>) -> Result<()> {
+async fn tweet(config: &Config, words: Vec<String>, parent: Option<Event>) -> Result<()> {
     let raw = if words.is_empty() {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf)?;
@@ -170,11 +183,14 @@ async fn tweet(config: &Config, words: Vec<String>) -> Result<()> {
         }
     }
 
-    let (content, mentions) = text::expand_mentions(raw, &config.known());
+    let (content, mut tags) = text::expand_mentions(raw, &config.known());
+    if let Some(parent) = &parent {
+        tags = reply_tags(parent, tags);
+    }
     let event = EventTemplate {
         created_at: Timestamp::now(),
         kind: Kind(1),
-        tags: Tags(mentions),
+        tags: Tags(tags),
         content,
     }
     .finalize(&config.secret_key()?);
@@ -188,6 +204,54 @@ async fn tweet(config: &Config, words: Vec<String>) -> Result<()> {
         if ok == 1 { "" } else { "s" }
     );
     Ok(())
+}
+
+/// nip-10 marked tags for a reply: point at the thread's root and at the
+/// parent, and notify everyone who was already in the conversation.
+fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
+    let parent_hex = parent.id.to_hex();
+    let parent_pk = parent.pubkey.to_hex();
+    let (root, _) = text::thread_refs(&parent.tags.0);
+
+    let mut thread = match root {
+        Some(root) if root != parent.id => vec![
+            vec!["e".into(), root.to_hex(), String::new(), "root".into()],
+            vec![
+                "e".into(),
+                parent_hex,
+                String::new(),
+                "reply".into(),
+                parent_pk.clone(),
+            ],
+        ],
+        _ => vec![vec![
+            "e".into(),
+            parent_hex,
+            String::new(),
+            "root".into(),
+            parent_pk.clone(),
+        ]],
+    };
+
+    let mut people = vec![parent_pk];
+    people.extend(
+        parent
+            .tags
+            .0
+            .iter()
+            .filter(|t| t.first().map(String::as_str) == Some("p"))
+            .filter_map(|t| t.get(1).cloned()),
+    );
+    for hex in people {
+        if !tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("p") && t.get(1) == Some(&hex))
+        {
+            tags.push(vec!["p".into(), hex]);
+        }
+    }
+    thread.append(&mut tags);
+    thread
 }
 
 /// sends an event to all configured relays, returning how many accepted it.
@@ -317,6 +381,63 @@ async fn show(
     Ok(())
 }
 
+/// prints the whole conversation `id` is part of, as an indented tree.
+async fn thread(config: &Config, id: ID) -> Result<()> {
+    let target = fetch_one(config, id).await?;
+    let root = text::thread_refs(&target.tags.0).0.unwrap_or(id);
+
+    let (by_id, replies) = tokio::join!(
+        fetch(
+            config,
+            Filter {
+                ids: Some(vec![root]),
+                ..Default::default()
+            },
+        ),
+        fetch(
+            config,
+            Filter {
+                kinds: Some(vec![Kind(1)]),
+                tags: Some(vec![TagQuery("e".into(), vec![root.to_hex()])]),
+                ..Default::default()
+            },
+        ),
+    );
+
+    let mut notes: HashMap<ID, Event> = HashMap::new();
+    for event in by_id.into_iter().chain(replies).chain([target]) {
+        if event.kind == Kind(1) {
+            notes.insert(event.id, event);
+        }
+    }
+
+    // anything whose parent we couldn't find hangs off the top level
+    let mut children: HashMap<Option<ID>, Vec<&Event>> = HashMap::new();
+    for event in notes.values() {
+        let parent = text::thread_refs(&event.tags.0)
+            .1
+            .filter(|p| notes.contains_key(p));
+        children.entry(parent).or_default().push(event);
+    }
+    for list in children.values_mut() {
+        list.sort_by_key(|e| e.created_at.0);
+    }
+
+    let known = config.known();
+    let mut stack: Vec<(&Event, usize)> = children
+        .get(&None)
+        .map(|top| top.iter().rev().map(|e| (*e, 0)).collect())
+        .unwrap_or_default();
+    while let Some((event, depth)) = stack.pop() {
+        print_note(event, &known, &"    ".repeat(depth));
+        if let Some(kids) = children.get(&Some(event.id)) {
+            stack.extend(kids.iter().rev().map(|e| (*e, depth + 1)));
+        }
+    }
+    seen::remember(notes.values().flat_map(hashes_shown));
+    Ok(())
+}
+
 /// the note's own id and, for replies, its parent's: both get printed.
 fn hashes_shown(event: &Event) -> impl Iterator<Item = ID> {
     [Some(event.id), text::thread_refs(&event.tags.0).1]
@@ -340,6 +461,19 @@ fn print_note(event: &Event, known: &[(String, PubKey)], indent: &str) {
         println!("{indent}{line}");
     }
     println!();
+}
+
+/// fetches a single note by id, or complains that no relay has it.
+async fn fetch_one(config: &Config, id: ID) -> Result<Event> {
+    let filter = Filter {
+        ids: Some(vec![id]),
+        ..Default::default()
+    };
+    fetch(config, filter)
+        .await
+        .into_iter()
+        .find(|e| e.id == id)
+        .with_context(|| format!("none of your relays has note {}", seen::short(&id)))
 }
 
 /// collects events until every relay says EOSE or we run out of patience.
