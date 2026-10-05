@@ -1,16 +1,16 @@
 #!/bin/bash
-# re-records docs/demo.gif against a throwaway local server full of made-up people.
+# re-records docs/demo.gif against a throwaway local relay (nak serve) full of made-up people.
 # needs: asciinema, agg (https://github.com/asciinema/agg), nak (https://github.com/fiatjaf/nak), jq
 set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 export WORK=$(mktemp -d)
 trap 'kill $SERVER 2>/dev/null; rm -rf "$WORK"' EXIT
 
-cargo build -q --release --manifest-path "$ROOT/Cargo.toml" --bins --examples
-"$ROOT/target/release/examples/devserver" 2>/dev/null & SERVER=$!
-sleep 0.5
+cargo build -q --release --manifest-path "$ROOT/Cargo.toml" --bins
+nak serve --port 7777 > /dev/null 2>&1 & SERVER=$!
+sleep 1
 
-R=ws://127.0.0.1:7777
+R=ws://localhost:7777
 now=$(date +%s)
 for who in ghost ada ken lain; do
   sk=$(nak key generate)
@@ -39,10 +39,20 @@ secret_key = "$ghost_sk"
 servers = ["$R"]
 timeout = 2
 
-[following]
-ada = "$ada_npub"
-ken = "$ken_npub"
+[following.ada]
+npub = "$ada_npub"
+servers = ["$R"]
+last_seen = $now
+
+[following.ken]
+npub = "$ken_npub"
+servers = ["$R"]
+last_seen = $now
 CFG
+
+# pretend ghost's server list was already announced, so nothing leaves this machine
+mkdir -p "$WORK/cache/txstr"
+printf %s "$R" > "$WORK/cache/txstr/announced-$(nak key public "$ghost_sk")"
 
 PATH="$ROOT/target/release:$PATH" XDG_CONFIG_HOME="$WORK/config" XDG_CACHE_HOME="$WORK/cache" \
   asciinema rec --overwrite --headless --window-size 96x26 --idle-time-limit 4 \

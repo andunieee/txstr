@@ -1,7 +1,7 @@
 //! turning `@nick` into key references on the way out, and back again on the way in,
 //! and working out where a note sits in a thread.
 
-use ritualistic::{PubKey, Tag, ID};
+use ritualistic::{Event, ID, PubKey, Tag};
 
 /// expands `@nick` for people in your follow list into mention references,
 /// returning the new content and the `p` tags to go with it.
@@ -111,6 +111,21 @@ pub fn thread_refs(tags: &[Tag]) -> (Option<ID>, Option<ID>) {
     (positional.first().copied(), positional.last().copied())
 }
 
+/// who started the thread a note is in: its own author for a top-level note,
+/// otherwise whoever the root reference names, if it names anyone.
+pub fn root_author(event: &Event) -> Option<PubKey> {
+    let Some(root) = thread_refs(&event.tags.0).0 else {
+        return Some(event.pubkey);
+    };
+    let root = root.to_hex();
+    event
+        .tags
+        .0
+        .iter()
+        .filter(|t| t.first().map(String::as_str) == Some("e") && t.get(1) == Some(&root))
+        .find_map(|t| t.get(4)?.parse().ok())
+}
+
 /// "3 minutes ago", the way twtxt says it.
 pub fn time_ago(then: u32, now: u32) -> String {
     let delta = now.saturating_sub(then) as u64;
@@ -176,6 +191,29 @@ mod tests {
         );
         assert_eq!(thread_refs(&[e(&r, ""), e(&p, "")]), (Some(r), Some(p)));
         assert_eq!(thread_refs(&[e(&r, "mention")]), (None, None));
+    }
+
+    #[test]
+    fn thread_starters() {
+        let (alice, bob) = (
+            ritualistic::SecretKey::generate(),
+            ritualistic::SecretKey::generate().pubkey(),
+        );
+        let note = |tags: Vec<Tag>| {
+            ritualistic::EventTemplate {
+                created_at: ritualistic::Timestamp(0),
+                kind: ritualistic::Kind(1),
+                tags: ritualistic::Tags(tags),
+                content: String::new(),
+            }
+            .finalize(&alice)
+        };
+        let r = ID([1; 32]);
+        let mut named = e(&r, "root");
+        named.push(bob.to_hex());
+        assert_eq!(root_author(&note(vec![])), Some(alice.pubkey()));
+        assert_eq!(root_author(&note(vec![named])), Some(bob));
+        assert_eq!(root_author(&note(vec![e(&r, "root")])), None);
     }
 
     #[test]

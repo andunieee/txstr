@@ -1,14 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ritualistic::{PubKey, SecretKey};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_SERVERS: [&str; 2] = [
-    "wss://wheat.happytavern.co",
-    "wss://soloco.nl",
-];
+pub const DEFAULT_SERVERS: [&str; 2] = ["wss://wheat.happytavern.co", "wss://soloco.nl"];
 
 /// everything txstr knows about you lives in one small, hand-editable toml file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,10 +32,66 @@ pub struct Config {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 
-    /// nick = npub. your follow list is yours: it stays in this file unless
-    /// `publish_follows` is on.
+    /// one table per nick. your follow list is yours: it stays in this file
+    /// unless `publish_follows` is on.
     #[serde(default)]
-    pub following: BTreeMap<String, String>,
+    pub following: BTreeMap<String, Follow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "FollowEntry")]
+pub struct Follow {
+    pub npub: String,
+
+    /// where we read their notes from, picked from the server list they
+    /// publish. empty means we don't know yet and use yours.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<String>,
+
+    /// when the newest note we've seen from them was posted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<u32>,
+}
+
+impl Follow {
+    pub fn new(npub: String, servers: Vec<String>) -> Self {
+        Self {
+            npub,
+            servers,
+            last_seen: None,
+        }
+    }
+}
+
+/// older configs had a bare `nick = "npub1…"` per follow, so accept both.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FollowEntry {
+    Npub(String),
+    Full {
+        npub: String,
+        #[serde(default)]
+        servers: Vec<String>,
+        #[serde(default)]
+        last_seen: Option<u32>,
+    },
+}
+
+impl From<FollowEntry> for Follow {
+    fn from(entry: FollowEntry) -> Self {
+        match entry {
+            FollowEntry::Npub(npub) => Follow::new(npub, Vec::new()),
+            FollowEntry::Full {
+                npub,
+                servers,
+                last_seen,
+            } => Follow {
+                npub,
+                servers,
+                last_seen,
+            },
+        }
+    }
 }
 
 fn default_servers() -> Vec<String> {
@@ -110,7 +163,11 @@ impl Config {
         if who == self.nick {
             return self.pubkey();
         }
-        let raw = self.following.get(who).map(String::as_str).unwrap_or(who);
+        let raw = self
+            .following
+            .get(who)
+            .map(|f| f.npub.as_str())
+            .unwrap_or(who);
         match raw.parse() {
             Ok(pk) => Ok(pk),
             Err(_) if self.following.contains_key(who) => {
@@ -125,12 +182,20 @@ impl Config {
         let mut known: Vec<(String, PubKey)> = self
             .following
             .iter()
-            .filter_map(|(nick, key)| Some((nick.clone(), key.parse().ok()?)))
+            .filter_map(|(nick, follow)| Some((nick.clone(), follow.npub.parse().ok()?)))
             .collect();
         if let Ok(me) = self.pubkey() {
             known.push((self.nick.clone(), me));
         }
         known
+    }
+
+    /// the nick we follow `pk` under, if any.
+    pub fn nick_of(&self, pk: &PubKey) -> Option<String> {
+        self.following
+            .iter()
+            .find(|(_, follow)| follow.npub.parse::<PubKey>().ok().as_ref() == Some(pk))
+            .map(|(nick, _)| nick.clone())
     }
 }
 
@@ -153,4 +218,35 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_and_new_follows() {
+        let config: Config = toml::from_str(
+            r#"
+            nick = "ghost"
+            secret_key = "00"
+
+            [following]
+            ada = "npub1old"
+
+            [following.ken]
+            npub = "npub1new"
+            servers = ["wss://a.example"]
+            last_seen = 1700000000
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.following["ada"].npub, "npub1old");
+        assert!(config.following["ada"].servers.is_empty());
+        assert_eq!(config.following["ken"].servers, ["wss://a.example"]);
+        assert_eq!(config.following["ken"].last_seen, Some(1700000000));
+
+        let again: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(again.following["ken"].last_seen, Some(1700000000));
+    }
 }

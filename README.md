@@ -30,15 +30,8 @@ Documentation
 
 Full docs (commands, config, how it works): https://andunieee.github.io/txstr/
 
-Hacking
--------
-
-`cargo run --example devserver` starts an in-memory server on
-`ws://127.0.0.1:7777`. Point a throwaway config at it (`txstr -c dev.toml
-quickstart`) to try things without talking to anyone.
-
 License
 -------
 
 txstr is released under the MIT License. Notes are signed JSON (`kind 1`,
-thread markers, mention tags, `kind 3` follows) and stay readable from any standard client.
+thread markers, mention tags, `kind 3` follows, `kind 10002` server lists) and stay readable from any standard client.

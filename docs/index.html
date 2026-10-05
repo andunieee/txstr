@@ -80,7 +80,6 @@
   <a href="#quickstart">quickstart</a>
   <a href="#commands">commands</a>
   <a href="#config">config</a>
-  <a href="#hacking">hacking</a>
   <a href="#protocol">protocol</a>
   <a href="https://github.com/andunieee/txstr">source</a>
 </nav>
@@ -98,6 +97,8 @@
 <p>You can send your notes to servers hosted by other people — whether they offer free access or paid options. Hosting text costs almost nothing, but you also don't have to trust server operators not to modify your content. Everything you write is cryptographically signed.</p>
 
 <p>When you post, txstr creates a simple JSON document, signs it with your private key, and sends it to your selected servers. Anyone who wants to read your posts connects to those same servers, requests your signature/key, and verifies that the content came directly from you without tampering.</p>
+
+<p>Your list of servers is published too, so people can find where you write. When you follow someone, txstr looks up their list and remembers a few of their servers next to their nick; your timeline then reads each person from their own servers. If someone goes quiet for over a week, txstr checks whether they've moved and offers to update your config. Notes that mention someone are also delivered to the servers they read from, and a thread is read from the servers of whoever started it, where every reply ends up.</p>
 
 <h2 id="install">installation</h2>
 
@@ -183,25 +184,24 @@ limit_timeline = 20
 character_warning = 280
 timeout = 10
 
-[following]
-ada = "npub1…"
-ken = "npub1…"</code></pre>
+[following.ada]
+npub = "npub1…"
+servers = ["wss://nos.lol", "wss://example.org"]
+last_seen = 1791210152
+
+[following.ken]
+npub = "npub1…"</code></pre>
 
 <dl>
   <dt>secret_key</dt>
   <dd>Your cryptographic identity (<code>nsec</code> or hex).</dd>
   <dt>servers</dt>
-  <dd>Servers txstr publishes to and fetches from.</dd>
+  <dd>Servers txstr publishes to and reads your own notes from. They're announced as your server list whenever they change.</dd>
   <dt>publish_follows</dt>
   <dd>When true, publishes follow lists publicly as petnames for compatibility with other clients.</dd>
+  <dt>following.&lt;nick&gt;</dt>
+  <dd><code>npub</code> is who they are. <code>servers</code> is where their notes are read from (filled in from their published server list; empty means your own servers are used). <code>last_seen</code> is when their newest note you've seen was posted. The older <code>nick = "npub1…"</code> form still works.</dd>
 </dl>
-
-<h2 id="hacking">local development</h2>
-
-<p>Run an in-memory server locally to test without connecting to external networks:</p>
-
-<pre><code><span class="p">$ </span>cargo run --example devserver
-<span class="p">$ </span>txstr -c dev.toml quickstart <span class="c"># use ws://127.0.0.1:7777 as the server</span></code></pre>
 
 <h2 id="protocol">protocol compatibility</h2>
 
@@ -212,6 +212,7 @@ ken = "npub1…"</code></pre>
   <li>Replies use thread markers.</li>
   <li>Mentions use <code>p</code> tags.</li>
   <li>Public follow lists are exported as <code>kind 3</code> events.</li>
+  <li>Server lists are <code>kind 10002</code> events: yours marks every server as both read and write, and others' are used to read from their write servers and to deliver mentions to their read servers.</li>
 </ul>
 
 <p>All notes published through txstr remain accessible from any standard client.</p>

@@ -3,11 +3,12 @@
 
 mod config;
 mod seen;
+mod servers;
 mod text;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -17,13 +18,14 @@ use ritualistic::{
     SubscriptionOptions, Tag, TagQuery, Tags, Timestamp,
 };
 
-use config::Config;
+use config::{Config, Follow};
+use servers::ServerList;
+
+/// someone's key and the servers we read their notes from.
+type Route = (PubKey, Vec<String>);
 
 #[derive(Parser)]
-#[command(
-    version,
-    about = "decentralised, minimalist microblogging for hackers"
-)]
+#[command(version, about = "decentralised, minimalist microblogging for hackers")]
 struct Cli {
     /// path to the config file
     #[arg(short, long, global = true)]
@@ -90,7 +92,7 @@ async fn main() -> Result<()> {
     let path = cli.config.unwrap_or_else(Config::default_path);
 
     if let Command::Quickstart = cli.command {
-        return quickstart(&path);
+        return quickstart(&path).await;
     }
 
     let mut config = Config::load(&path)?;
@@ -98,22 +100,34 @@ async fn main() -> Result<()> {
         Command::Quickstart => unreachable!(),
         Command::Tweet { text } => tweet(&config, text, None).await,
         Command::Reply { hash, text } => {
-            let id = seen::resolve(&hash)?;
-            let parent = fetch_one(&config, id).await?;
+            let (id, root_author) = seen::resolve(&hash)?;
+            let servers = thread_servers(&config, id, root_author).await?;
+            let parent = fetch_one(&config, &servers, id).await?;
             tweet(&config, text, Some(parent)).await
         }
-        Command::Thread { hash } => thread(&config, seen::resolve(&hash)?).await,
+        Command::Thread { hash } => {
+            let (id, root_author) = seen::resolve(&hash)?;
+            thread(&config, id, root_author).await
+        }
         Command::Timeline {
             limit,
             ascending,
             follow,
         } => {
-            let mut authors: Vec<PubKey> = config.known().into_iter().map(|(_, pk)| pk).collect();
-            authors.dedup();
-            if authors.len() <= 1 {
+            let nicks: Vec<String> = config.following.keys().cloned().collect();
+            if nicks.is_empty() {
                 eprintln!("you're not following anyone yet. try `txstr follow <nick> <npub>`.");
             }
-            show(&config, authors, limit, ascending, follow).await
+            refresh_servers(&mut config, &path, &nicks).await?;
+            let mut routes: Vec<Route> = vec![(config.pubkey()?, config.servers.clone())];
+            for follow in config.following.values() {
+                if let Some(route) = route(&config, follow)
+                    && !routes.iter().any(|(pk, _)| *pk == route.0)
+                {
+                    routes.push(route);
+                }
+            }
+            show(&mut config, &path, routes, limit, ascending, follow).await
         }
         Command::View {
             who,
@@ -122,7 +136,25 @@ async fn main() -> Result<()> {
             follow,
         } => {
             let pk = config.resolve(&who)?;
-            show(&config, vec![pk], limit, ascending, follow).await
+            let route = if pk == config.pubkey()? {
+                (pk, config.servers.clone())
+            } else if let Some(nick) = config.nick_of(&pk) {
+                refresh_servers(&mut config, &path, std::slice::from_ref(&nick)).await?;
+                route(&config, &config.following[&nick]).context("invalid key in follow list")?
+            } else {
+                let servers = server_lists(&config, vec![pk])
+                    .await
+                    .get(&pk)
+                    .map(|list| servers::pick(&list.write))
+                    .unwrap_or_default();
+                if servers.is_empty() {
+                    eprintln!("  … couldn't find where they publish, trying your servers");
+                    (pk, config.servers.clone())
+                } else {
+                    (pk, servers)
+                }
+            };
+            show(&mut config, &path, vec![route], limit, ascending, follow).await
         }
         Command::Follow { nick, npub } => {
             let pk: PubKey = npub
@@ -132,9 +164,23 @@ async fn main() -> Result<()> {
             if config.following.contains_key(&nick) {
                 bail!("you're already following someone as '{nick}'");
             }
-            config.following.insert(nick.clone(), pk.to_npub());
+            let servers = server_lists(&config, vec![pk])
+                .await
+                .get(&pk)
+                .map(|list| servers::pick(&list.write))
+                .unwrap_or_default();
+            config
+                .following
+                .insert(nick.clone(), Follow::new(pk.to_npub(), servers.clone()));
             config.save(&path)?;
             println!("✓ you're now following {nick}.");
+            if servers.is_empty() {
+                println!(
+                    "  couldn't find where they publish, so you'll read them from your servers."
+                );
+            } else {
+                println!("  reading them from {}.", servers.join(" "));
+            }
             if config.publish_follows {
                 publish_follows(&config, None)
                     .await
@@ -144,21 +190,21 @@ async fn main() -> Result<()> {
         }
         Command::Unfollow { nick } => {
             let nick = nick.trim_start_matches('@');
-            let Some(npub) = config.following.remove(nick) else {
+            let Some(unfollowed) = config.following.remove(nick) else {
                 bail!("you're not following anyone as '{nick}'");
             };
             config.save(&path)?;
             println!("✓ you've unfollowed {nick}.");
             if config.publish_follows {
-                publish_follows(&config, npub.parse().ok())
+                publish_follows(&config, unfollowed.npub.parse().ok())
                     .await
                     .context("saved locally, but couldn't publish your follow list")?;
             }
             Ok(())
         }
         Command::Following => {
-            for (nick, npub) in &config.following {
-                println!("➤ {} @ {npub}", bold(nick));
+            for (nick, follow) in &config.following {
+                println!("➤ {} @ {}", bold(nick), follow.npub);
             }
             Ok(())
         }
@@ -207,9 +253,14 @@ async fn tweet(config: &Config, words: Vec<String>, parent: Option<Event>) -> Re
     }
     .finalize(&config.secret_key()?);
     let id = event.id;
+    let root_author = text::root_author(&event);
 
-    let ok = publish(config, event).await?;
-    seen::remember([id]);
+    if let Err(err) = announce_servers(config, false).await {
+        eprintln!("  ✗ couldn't announce your servers: {err:#}");
+    }
+    let urls = recipients(config, &event).await?;
+    let ok = publish(config, &urls, event).await?;
+    seen::remember([(id, root_author)]);
     println!(
         "✓ posted {} to {ok} server{}.",
         seen::short(&id),
@@ -248,10 +299,17 @@ fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
     let parent_hex = parent.id.to_hex();
     let parent_pk = parent.pubkey.to_hex();
     let (root, _) = text::thread_refs(&parent.tags.0);
+    let root_author = text::root_author(parent).map(|pk| pk.to_hex());
 
     let mut thread = match root {
         Some(root) if root != parent.id => vec![
-            vec!["e".into(), root.to_hex(), String::new(), "root".into()],
+            vec![
+                "e".into(),
+                root.to_hex(),
+                String::new(),
+                "root".into(),
+                root_author.clone().unwrap_or_default(),
+            ],
             vec![
                 "e".into(),
                 parent_hex,
@@ -269,7 +327,9 @@ fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
         ]],
     };
 
-    let mut people = vec![parent_pk];
+    // the root's author too, so the reply lands in their inbox with the rest
+    let mut people: Vec<String> = root_author.into_iter().collect();
+    people.push(parent_pk);
     people.extend(
         parent
             .tags
@@ -290,38 +350,202 @@ fn reply_tags(parent: &Event, mut tags: Vec<Tag>) -> Vec<Tag> {
     thread
 }
 
-/// sends an event to all configured servers, returning how many accepted it.
-async fn publish(config: &Config, event: Event) -> Result<usize> {
+/// our servers, plus a few of the inbox servers of everyone the note tags,
+/// so it reaches them even if they don't read from where we write.
+async fn recipients(config: &Config, event: &Event) -> Result<Vec<String>> {
+    let me = config.pubkey()?;
+    let mut tagged: Vec<PubKey> = Vec::new();
+    for tag in &event.tags.0 {
+        if let (Some("p"), Some(hex)) = (tag.first().map(String::as_str), tag.get(1))
+            && let Ok(pk) = hex.parse::<PubKey>()
+            && pk != me
+            && !tagged.contains(&pk)
+        {
+            tagged.push(pk);
+        }
+    }
+
+    let mut urls = config.servers.clone();
+    if tagged.is_empty() {
+        return Ok(urls);
+    }
+    let mut have: HashSet<String> = urls.iter().filter_map(|u| servers::clean(u)).collect();
+    for list in server_lists(config, tagged).await.values() {
+        for url in servers::pick(&list.read) {
+            if have.insert(url.clone()) {
+                urls.push(url);
+            }
+        }
+    }
+    Ok(urls)
+}
+
+/// sends an event to `urls`, reporting on each, returning how many accepted it.
+async fn publish(config: &Config, urls: &[String], event: Event) -> Result<usize> {
+    let ok = send(urls, event, config.timeout, true).await;
+    if ok == 0 {
+        bail!("no server accepted the event");
+    }
+    Ok(ok)
+}
+
+async fn send(urls: &[String], event: Event, timeout: u64, report: bool) -> usize {
     let mut network = Network::new();
-    let mut results = network.publish_many(&config.servers, event).await;
-    let deadline = tokio::time::sleep(Duration::from_secs(config.timeout));
+    let mut results = network.publish_many(urls, event).await;
+    let deadline = tokio::time::sleep(Duration::from_secs(timeout));
     tokio::pin!(deadline);
 
     let mut ok = 0;
     let mut seen = 0;
-    while seen < config.servers.len() {
+    while seen < urls.len() {
         tokio::select! {
             result = results.recv() => match result {
                 Some(result) => {
                     seen += 1;
                     match result.error {
-                        None => { ok += 1; eprintln!("  ✓ {}", result.relay_url) }
-                        Some(err) => eprintln!("  ✗ {}: {err}", result.relay_url),
+                        None => {
+                            ok += 1;
+                            if report { eprintln!("  ✓ {}", result.relay_url) }
+                        }
+                        Some(err) if report => eprintln!("  ✗ {}: {err}", result.relay_url),
+                        Some(_) => {}
                     }
                 }
                 None => break,
             },
             _ = &mut deadline => {
-                eprintln!("  … gave up waiting on the remaining servers");
+                if report { eprintln!("  … gave up waiting on the remaining servers") }
                 break;
             }
         }
     }
+    ok
+}
 
-    if ok == 0 {
-        bail!("no server accepted the event");
+/// publishes our server list (kind 10002), every server both read and write,
+/// to our servers and the directories, so others know where to find us.
+/// skipped when it's the same list we announced last time, unless forced.
+async fn announce_servers(config: &Config, force: bool) -> Result<()> {
+    let me = config.pubkey()?;
+    if !force && servers::already_announced(&me, &config.servers) {
+        return Ok(());
     }
-    Ok(ok)
+    let event = EventTemplate {
+        created_at: Timestamp::now(),
+        kind: servers::LIST,
+        tags: Tags(servers::tags(&config.servers)),
+        content: String::new(),
+    }
+    .finalize(&config.secret_key()?);
+
+    let mut urls = config.servers.clone();
+    urls.extend(servers::DIRECTORIES.map(String::from));
+    if send(&urls, event, config.timeout, false).await == 0 {
+        bail!("no server accepted it");
+    }
+    servers::remember_announced(&me, &config.servers);
+    println!("✓ announced your servers, so people can find your notes.");
+    Ok(())
+}
+
+/// the newest server list of each of `pubkeys`, looked up on the directories.
+async fn server_lists(config: &Config, pubkeys: Vec<PubKey>) -> HashMap<PubKey, ServerList> {
+    let filter = Filter {
+        kinds: Some(vec![servers::LIST]),
+        authors: Some(pubkeys),
+        ..Default::default()
+    };
+    let directories = servers::DIRECTORIES.map(String::from);
+    servers::newest(fetch_from(&Network::new(), &directories, filter, config.timeout).await)
+}
+
+/// looks up the server lists of whoever among `nicks` we don't have servers
+/// for, or haven't seen a note from in over a week, in case they've moved.
+async fn refresh_servers(config: &mut Config, path: &Path, nicks: &[String]) -> Result<()> {
+    let now = Timestamp::now().0;
+    let due: Vec<(String, PubKey)> = nicks
+        .iter()
+        .filter_map(|nick| {
+            let follow = config.following.get(nick)?;
+            let stale = follow.servers.is_empty()
+                || follow
+                    .last_seen
+                    .is_none_or(|t| now.saturating_sub(t) > servers::STALE);
+            Some((nick.clone(), follow.npub.parse().ok().filter(|_| stale)?))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(());
+    }
+
+    let lists = server_lists(config, due.iter().map(|(_, pk)| *pk).collect()).await;
+    let mut changed = false;
+    for (nick, pk) in due {
+        let Some(list) = lists.get(&pk) else { continue };
+        let fresh = servers::pick(&list.write);
+        let Some(follow) = config.following.get_mut(&nick) else {
+            continue;
+        };
+        if fresh.is_empty() {
+            continue;
+        }
+        if follow.servers.is_empty() {
+            eprintln!("  ✓ found where {nick} publishes: {}", fresh.join(" "));
+            follow.servers = fresh;
+            changed = true;
+        } else if !servers::still_listed(&follow.servers, &list.write) {
+            println!("➤ {nick} seems to have moved.");
+            println!("  you read them from: {}", follow.servers.join(" "));
+            println!("  they now publish to: {}", list.write.join(" "));
+            if confirm(&format!(
+                "➤ read {nick} from {} from now on?",
+                fresh.join(" ")
+            ))? {
+                follow.servers = fresh;
+            } else {
+                // so we don't ask again until they've been quiet another week
+                follow.last_seen = Some(now);
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        config.save(path)?;
+    }
+    Ok(())
+}
+
+/// where to read someone we follow from: their servers, or ours if we don't know them yet.
+fn route(config: &Config, follow: &Follow) -> Option<Route> {
+    let pk = follow.npub.parse().ok()?;
+    let servers = if follow.servers.is_empty() {
+        config.servers.clone()
+    } else {
+        follow.servers.clone()
+    };
+    Some((pk, servers))
+}
+
+/// moves `last_seen` forward for everyone we follow in `newest`, which has
+/// the time of the newest note we've got from each author.
+fn bump_last_seen(config: &mut Config, newest: &HashMap<PubKey, u32>) -> bool {
+    let mut changed = false;
+    for follow in config.following.values_mut() {
+        let Ok(pk) = follow.npub.parse::<PubKey>() else {
+            continue;
+        };
+        let newest = newest.get(&pk).copied();
+        if newest > follow.last_seen {
+            follow.last_seen = newest;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn newest_by_author(newest: &mut HashMap<PubKey, u32>, event: &Event) {
+    let at = newest.entry(event.pubkey).or_default();
+    *at = (*at).max(event.created_at.0);
 }
 
 /// publishes the follow list as a kind 3 event. kind 3 is replaceable, so to
@@ -329,14 +553,16 @@ async fn publish(config: &Config, event: Event) -> Result<usize> {
 /// one on the servers, drop whoever was just unfollowed, and lay ours on top.
 async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<()> {
     let me = config.pubkey()?;
-    let previous = fetch(
-        config,
+    let previous = fetch_from(
+        &Network::new(),
+        &config.servers,
         Filter {
             kinds: Some(vec![Kind(3)]),
             authors: Some(vec![me]),
             limit: Some(1),
             ..Default::default()
         },
+        config.timeout,
     )
     .await
     .into_iter()
@@ -347,9 +573,10 @@ async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<
     let mut tags: Vec<Tag> = config
         .following
         .iter()
-        .filter_map(|(nick, npub)| {
-            let pk: PubKey = npub.parse().ok()?;
-            Some(vec!["p".into(), pk.to_hex(), String::new(), nick.clone()])
+        .filter_map(|(nick, follow)| {
+            let pk: PubKey = follow.npub.parse().ok()?;
+            let hint = follow.servers.first().cloned().unwrap_or_default();
+            Some(vec!["p".into(), pk.to_hex(), hint, nick.clone()])
         })
         .collect();
     let ours: Vec<String> = tags.iter().map(|t| t[1].clone()).collect();
@@ -380,7 +607,7 @@ async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<
     }
     .finalize(&config.secret_key()?);
 
-    let ok = publish(config, event).await?;
+    let ok = publish(config, &config.servers, event).await?;
     println!(
         "✓ follow list published to {ok} server{}.",
         if ok == 1 { "" } else { "s" }
@@ -388,22 +615,47 @@ async fn publish_follows(config: &Config, unfollowed: Option<PubKey>) -> Result<
     Ok(())
 }
 
+/// prints the latest notes of each author, asking each one's own servers separately.
 async fn show(
-    config: &Config,
-    authors: Vec<PubKey>,
+    config: &mut Config,
+    path: &Path,
+    routes: Vec<Route>,
     limit: Option<usize>,
     ascending: bool,
     follow: bool,
 ) -> Result<()> {
     let limit = limit.unwrap_or(config.limit_timeline);
-    let filter = Filter {
-        kinds: Some(vec![Kind(1)]),
-        authors: Some(authors.clone()),
-        limit: Some(limit),
-        ..Default::default()
-    };
+    let network = Network::new();
+    let mut requests = tokio::task::JoinSet::new();
+    for (pk, urls) in routes.clone() {
+        let filter = Filter {
+            kinds: Some(vec![Kind(1)]),
+            authors: Some(vec![pk]),
+            limit: Some(limit),
+            ..Default::default()
+        };
+        let (network, timeout) = (network.clone(), config.timeout);
+        requests.spawn(async move {
+            let mut events = fetch_from(&network, &urls, filter, timeout).await;
+            events.retain(|e| e.pubkey == pk);
+            events
+        });
+    }
+    let mut events = Vec::new();
+    while let Some(found) = requests.join_next().await {
+        events.extend(found.unwrap_or_default());
+    }
 
-    let mut events = fetch(config, filter).await;
+    let mut newest = HashMap::new();
+    for event in &events {
+        newest_by_author(&mut newest, event);
+    }
+    if bump_last_seen(config, &newest)
+        && let Err(err) = config.save(path)
+    {
+        eprintln!("  ✗ couldn't save when you last saw everyone: {err:#}");
+    }
+
     events.sort_by_key(|e| std::cmp::Reverse(e.created_at.0));
     events.truncate(limit);
     // like tail -f, new notes show up at the bottom, so the history goes oldest first too
@@ -420,64 +672,162 @@ async fn show(
     if follow {
         let since = events.iter().map(|e| e.created_at.0).max();
         let seen = events.iter().map(|e| e.id).collect();
-        watch(config, authors, since, seen).await;
+        watch(config, path, network, routes, since, seen).await;
     }
     Ok(())
 }
 
-/// streams new notes until interrupted, resubscribing if every server drops us.
-async fn watch(config: &Config, authors: Vec<PubKey>, since: Option<u32>, mut seen: HashSet<ID>) {
+/// streams new notes until interrupted, one subscription per author.
+async fn watch(
+    config: &Config,
+    path: &Path,
+    network: Network,
+    routes: Vec<Route>,
+    since: Option<u32>,
+    mut seen: HashSet<ID>,
+) {
     let known = config.known();
-    let mut since = since.unwrap_or(Timestamp::now().0);
-    let network = Network::new();
+    let since = since.unwrap_or(Timestamp::now().0);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    for (pk, urls) in routes {
+        let name = text::display_name(&pk, &known);
+        tokio::spawn(tail(network.clone(), pk, urls, since, name, tx.clone()));
+    }
+    drop(tx);
+
+    // last_seen is written down in batches, not once per note
+    let mut newest = HashMap::new();
+    let mut flush = tokio::time::interval(Duration::from_secs(10));
+    loop {
+        tokio::select! {
+            event = rx.recv() => {
+                let Some(event) = event else { break };
+                if seen.insert(event.id) {
+                    print_note(&event, &known, "");
+                    seen::remember(hashes_shown(&event));
+                    newest_by_author(&mut newest, &event);
+                }
+            }
+            _ = flush.tick() => if !newest.is_empty() {
+                save_last_seen(path, &std::mem::take(&mut newest));
+            },
+        }
+    }
+}
+
+/// reloads the config before saving, so a long-running watch doesn't undo
+/// whatever was changed in the meantime.
+fn save_last_seen(path: &Path, newest: &HashMap<PubKey, u32>) {
+    let saved = Config::load(path).and_then(|mut config| {
+        if bump_last_seen(&mut config, newest) {
+            config.save(path)?;
+        }
+        Ok(())
+    });
+    if let Err(err) = saved {
+        eprintln!("  ✗ couldn't save when you last saw everyone: {err:#}");
+    }
+}
+
+/// forwards one author's new notes, resubscribing if all their servers drop us.
+async fn tail(
+    network: Network,
+    pk: PubKey,
+    urls: Vec<String>,
+    mut since: u32,
+    name: String,
+    tx: tokio::sync::mpsc::Sender<Event>,
+) {
     loop {
         let filter = Filter {
             kinds: Some(vec![Kind(1)]),
-            authors: Some(authors.clone()),
+            authors: Some(vec![pk]),
             since: Some(Timestamp(since)),
             ..Default::default()
         };
         let mut occurrences = network
-            .subscribe(&config.servers, filter, SubscriptionOptions::default())
+            .subscribe(&urls, filter, SubscriptionOptions::default())
             .await;
         while let Some(occ) = occurrences.recv().await {
             match occ {
-                Occurrence::Event(event, _)
-                    if event.verify_signature() && seen.insert(event.id) =>
-                {
+                Occurrence::Event(event, _) if event.pubkey == pk && event.verify_signature() => {
                     since = since.max(event.created_at.0);
-                    print_note(&event, &known, "");
-                    seen::remember(hashes_shown(&event));
+                    if tx.send(*event).await.is_err() {
+                        return;
+                    }
                 }
                 Occurrence::Close => break,
                 _ => {}
             }
         }
-        eprintln!("  … lost every server, reconnecting in 30s");
+        eprintln!("  … lost every server for {name}, reconnecting in 30s");
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }
 
+/// a conversation lives on the inbox servers of whoever started it, since
+/// every reply tags them. when we don't know who that is, we look the note up
+/// where we usually read from and work it out.
+async fn thread_servers(
+    config: &Config,
+    id: ID,
+    root_author: Option<PubKey>,
+) -> Result<Vec<String>> {
+    let root_author = match root_author {
+        Some(pk) => pk,
+        None => {
+            let everywhere = everywhere(config);
+            let note = fetch_one(config, &everywhere, id).await?;
+            match text::root_author(&note) {
+                Some(pk) => pk,
+                None => {
+                    let root = text::thread_refs(&note.tags.0).0.unwrap_or(id);
+                    fetch_one(config, &everywhere, root)
+                        .await
+                        .context("couldn't find who started this thread")?
+                        .pubkey
+                }
+            }
+        }
+    };
+    let inbox = server_lists(config, vec![root_author])
+        .await
+        .get(&root_author)
+        .map(|list| servers::pick(&list.read))
+        .unwrap_or_default();
+    Ok(if inbox.is_empty() {
+        config.servers.clone()
+    } else {
+        inbox
+    })
+}
+
 /// prints the whole conversation `id` is part of, as an indented tree.
-async fn thread(config: &Config, id: ID) -> Result<()> {
-    let target = fetch_one(config, id).await?;
+async fn thread(config: &Config, id: ID, root_author: Option<PubKey>) -> Result<()> {
+    let servers = thread_servers(config, id, root_author).await?;
+    let target = fetch_one(config, &servers, id).await?;
     let root = text::thread_refs(&target.tags.0).0.unwrap_or(id);
 
+    let network = Network::new();
     let (by_id, replies) = tokio::join!(
-        fetch(
-            config,
+        fetch_from(
+            &network,
+            &servers,
             Filter {
                 ids: Some(vec![root]),
                 ..Default::default()
             },
+            config.timeout,
         ),
-        fetch(
-            config,
+        fetch_from(
+            &network,
+            &servers,
             Filter {
                 kinds: Some(vec![Kind(1)]),
                 tags: Some(vec![TagQuery("e".into(), vec![root.to_hex()])]),
                 ..Default::default()
             },
+            config.timeout,
         ),
     );
 
@@ -515,11 +865,14 @@ async fn thread(config: &Config, id: ID) -> Result<()> {
     Ok(())
 }
 
-/// the note's own id and, for replies, its parent's: both get printed.
-fn hashes_shown(event: &Event) -> impl Iterator<Item = ID> {
+/// the note's own id and, for replies, its parent's: both get printed. they
+/// share a thread, so they share its root's author.
+fn hashes_shown(event: &Event) -> impl Iterator<Item = seen::Seen> {
+    let root_author = text::root_author(event);
     [Some(event.id), text::thread_refs(&event.tags.0).1]
         .into_iter()
         .flatten()
+        .map(move |id| (id, root_author))
 }
 
 fn print_note(event: &Event, known: &[(String, PubKey)], indent: &str) {
@@ -540,26 +893,42 @@ fn print_note(event: &Event, known: &[(String, PubKey)], indent: &str) {
     println!();
 }
 
-/// fetches a single note by id, or complains that no server has it.
-async fn fetch_one(config: &Config, id: ID) -> Result<Event> {
+/// fetches a single note by id from `urls`, or complains that none has it.
+async fn fetch_one(config: &Config, urls: &[String], id: ID) -> Result<Event> {
     let filter = Filter {
         ids: Some(vec![id]),
         ..Default::default()
     };
-    fetch(config, filter)
+    fetch_from(&Network::new(), urls, filter, config.timeout)
         .await
         .into_iter()
         .find(|e| e.id == id)
-        .with_context(|| format!("none of your servers has note {}", seen::short(&id)))
+        .with_context(|| format!("couldn't find note {} anywhere", seen::short(&id)))
+}
+
+/// our servers and those of everyone we follow: where the notes we show come from.
+fn everywhere(config: &Config) -> Vec<String> {
+    let mut have = HashSet::new();
+    config
+        .servers
+        .iter()
+        .chain(config.following.values().flat_map(|f| &f.servers))
+        .filter(|url| servers::clean(url).is_some_and(|url| have.insert(url)))
+        .cloned()
+        .collect()
 }
 
 /// collects events until every server says EOSE or we run out of patience.
-async fn fetch(config: &Config, filter: Filter) -> Vec<Event> {
-    let network = Network::new();
+async fn fetch_from(
+    network: &Network,
+    urls: &[String],
+    filter: Filter,
+    timeout: u64,
+) -> Vec<Event> {
     let mut occurrences = network
-        .subscribe(&config.servers, filter, SubscriptionOptions::default())
+        .subscribe(urls, filter, SubscriptionOptions::default())
         .await;
-    let deadline = tokio::time::sleep(Duration::from_secs(config.timeout));
+    let deadline = tokio::time::sleep(Duration::from_secs(timeout));
     tokio::pin!(deadline);
 
     let mut events = Vec::new();
@@ -576,7 +945,7 @@ async fn fetch(config: &Config, filter: Filter) -> Vec<Event> {
     events
 }
 
-fn quickstart(path: &std::path::Path) -> Result<()> {
+async fn quickstart(path: &Path) -> Result<()> {
     println!("txstr - quickstart");
     println!("==================\n");
     println!("this wizard will set up txstr for you.\n");
@@ -617,6 +986,9 @@ fn quickstart(path: &std::path::Path) -> Result<()> {
 
     config.save(path)?;
     println!("\n✓ created config file at {}", path.display());
+    if let Err(err) = announce_servers(&config, true).await {
+        eprintln!("✗ couldn't announce your servers yet: {err:#}");
+    }
     println!("✓ you are {} — tell your friends:", bold(&config.nick));
     println!(
         "  txstr follow {} {}",
