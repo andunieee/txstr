@@ -8,7 +8,7 @@ No algorithms. No feed manipulation. No likes, reposts, ads, or recommended
 content. Your identity is a keypair, your account lives on your machine, and
 your timeline contains only the people you explicitly follow.
 
-![demo](docs/demo.gif)
+![demo](https://andunieee.github.io/txstr/demo.gif)
 
 Conceptually, txstr is a bit like RSS or twtxt: you get someone's identity,
 you follow them, and you read their posts. No server needed to publish --

@@ -1,6 +1,6 @@
 [package]
 name = "txstr"
-version = "0.1.0"
+version = "0.1.1"
 description = "decentralised, minimalist microblogging for hackers"
 license = "MIT"
 readme = "README.md"
