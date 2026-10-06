@@ -3,7 +3,20 @@ name = "txstr"
 version = "0.1.0"
 description = "decentralised, minimalist microblogging for hackers"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/andunieee/txstr"
+homepage = "https://andunieee.github.io/txstr/"
+documentation = "https://andunieee.github.io/txstr/"
+keywords = ["microblogging", "social", "cli", "twtxt", "nostr"]
+categories = ["command-line-utilities"]
+rust-version = "1.91"
 edition = "2024"
+exclude = [
+    ".github/**",
+    "docs/.nojekyll",
+    "docs/demo/play.sh",
+    "docs/demo/record.sh",
+]
 
 [dependencies]
 anyhow = "1.0.104"
