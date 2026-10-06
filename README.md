@@ -27,7 +27,7 @@ archive for your platform, unpack it, and put `txstr` somewhere on your
 
 Or build from source:
 
-    $ cargo install --locked --git https://github.com/andunieee/txstr
+    $ cargo install --locked txstr
 
 Then:
 
